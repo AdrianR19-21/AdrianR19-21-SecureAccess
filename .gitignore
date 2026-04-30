@@ -1,0 +1,31 @@
+# Archivos de entorno y secretos
+.env
+.env.local
+.env.*.local
+
+# Dependencias
+node_modules/
+package-lock.json
+
+# Build output
+.next/
+out/
+dist/
+
+# Base de datos local
+prisma/dev.db
+
+# Logs
+*.log
+diagnostico.log
+
+# IDE
+.vscode/
+.idea/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Archivos de prueba local
+test-image.png

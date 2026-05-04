@@ -1,7 +1,7 @@
 'use server';
 
 import crypto, { publicDecrypt } from 'crypto';
-import { prisma } from '../lib/prisma';
+import { prisma, ensureDatabaseReady } from '../lib/prisma';
 import { revalidatePath } from 'next/cache';
 
 const PASSWORD_PREFIX = 'scrypt$';
@@ -118,6 +118,8 @@ async function migrateLegacyPasswords() {
 }
 
 async function ensureLegacyPasswordMigration() {
+  await ensureDatabaseReady();
+
   if (!passwordMigrationPromise) {
     passwordMigrationPromise = migrateLegacyPasswords().catch((error) => {
       passwordMigrationPromise = null;
@@ -129,6 +131,7 @@ async function ensureLegacyPasswordMigration() {
 }
 
 export async function getUser(username, password) {
+  await ensureDatabaseReady();
   await ensureLegacyPasswordMigration();
 
   const user = await prisma.user.findUnique({
@@ -149,6 +152,7 @@ export async function getUser(username, password) {
 }
 
 export async function registerUser(username, password) {
+  await ensureDatabaseReady();
   await ensureLegacyPasswordMigration();
 
   const existing = await prisma.user.findUnique({
@@ -167,6 +171,7 @@ export async function registerUser(username, password) {
 }
 
 export async function getUserData(userId) {
+  await ensureDatabaseReady();
   const uid = parseInt(userId);
   const links = await prisma.link.findMany({
     where: { userId: uid },
@@ -200,6 +205,7 @@ async function getOwnedVaultEntry(id, userId) {
 }
 
 export async function saveLinkAction(data, userId) {
+  await ensureDatabaseReady();
   const uid = parseInt(userId);
   const payload = {
     title: data.title,
@@ -240,6 +246,7 @@ export async function saveLinkAction(data, userId) {
 }
 
 export async function deleteLinkAction(id, userId) {
+  await ensureDatabaseReady();
   const uid = parseInt(userId);
   if (isNaN(uid)) throw new Error('ID de usuario no válido');
 
@@ -258,6 +265,7 @@ export async function deleteLinkAction(id, userId) {
 }
 
 export async function removeLinkImageAction(id, userId) {
+  await ensureDatabaseReady();
   const uid = parseInt(userId);
   if (isNaN(uid)) throw new Error('ID de usuario no válido');
 
@@ -281,6 +289,7 @@ export async function removeLinkImageAction(id, userId) {
 }
 
 export async function saveVaultAction(data, userId) {
+  await ensureDatabaseReady();
   const uid = parseInt(userId);
   const encryptedSecretValue = encryptVaultValue(data.secretValue);
 
@@ -316,6 +325,7 @@ export async function saveVaultAction(data, userId) {
 }
 
 export async function deleteVaultAction(id, userId) {
+  await ensureDatabaseReady();
   const uid = parseInt(userId);
   if (isNaN(uid)) throw new Error('ID de usuario no válido');
 

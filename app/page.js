@@ -236,7 +236,7 @@ export default function HomePage() {
       setLoginForm({ username: '', password: '' });
       showToast('Sesión iniciada correctamente');
     } catch (error) {
-      showToast('Error al iniciar sesión');
+      showToast(error.message || 'Error al iniciar sesión');
     }
   };
 

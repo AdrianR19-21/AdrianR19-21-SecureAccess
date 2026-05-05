@@ -503,6 +503,7 @@ export default function HomePage() {
       const nextData = upsertLinkInData(data, localLink);
       setData(nextData);
       saveLocalData(activeUser.username, nextData);
+      await loadUserData(activeUser);
       setLinkForm(initialLinkForm);
       showToast(linkForm.editingId ? 'Enlace actualizado' : 'Enlace guardado');
     } catch (error) {
@@ -619,6 +620,7 @@ export default function HomePage() {
       const nextData = upsertVaultInData(data, localVaultEntry);
       setData(nextData);
       saveLocalData(activeUser.username, nextData);
+      await loadUserData(activeUser);
       setVaultForm(initialVaultForm);
       showToast(vaultForm.editingId ? 'Credencial actualizada' : 'Credencial guardada');
     } catch (error) {

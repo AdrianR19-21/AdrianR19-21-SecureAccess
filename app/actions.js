@@ -170,6 +170,22 @@ export async function registerUser(username, password) {
   return { id: user.id, username: user.username };
 }
 
+export async function getRegisteredUsers() {
+  await ensureDatabaseReady();
+
+  const users = await prisma.user.findMany({
+    select: {
+      id: true,
+      username: true,
+    },
+    orderBy: {
+      id: 'asc',
+    },
+  });
+
+  return users;
+}
+
 export async function getUserData(userId) {
   await ensureDatabaseReady();
   const uid = parseInt(userId);

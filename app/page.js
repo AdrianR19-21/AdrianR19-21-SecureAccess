@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   getUser,
   registerUser,
+  getRegisteredUsers,
   getUserData,
   saveLinkAction,
   deleteLinkAction,
@@ -103,6 +104,7 @@ export default function HomePage() {
   const [searchInput, setSearchInput] = useState('');
   const [vaultSearchInput, setVaultSearchInput] = useState('');
   const [data, setData] = useState({ links: [], vault: [] });
+  const [registeredUsers, setRegisteredUsers] = useState([]);
   const [toast, setToast] = useState({ visible: false, message: '' });
 
   const isLogged = Boolean(activeUser);
@@ -128,11 +130,21 @@ export default function HomePage() {
     }
   };
 
+  const loadRegisteredUsers = async () => {
+    try {
+      const users = await getRegisteredUsers();
+      setRegisteredUsers(users || []);
+    } catch (_error) {
+      showToast('Error cargando usuarios registrados');
+    }
+  };
+
   useEffect(() => {
     const user = getSession();
     if (user) {
       setActiveUser(user);
       loadUserData(user.id);
+      loadRegisteredUsers();
     }
   }, []);
 
@@ -213,6 +225,7 @@ export default function HomePage() {
       setActivePanel('linksPanel');
       setRegisterForm({ username: '', password: '' });
       showToast('Cuenta creada en BD y sesión iniciada');
+      loadRegisteredUsers();
     } catch (error) {
       showToast(error.message || 'Error al registrar');
     }
@@ -235,6 +248,7 @@ export default function HomePage() {
       setActivePanel('linksPanel');
       setLoginForm({ username: '', password: '' });
       showToast('Sesión iniciada correctamente');
+      loadRegisteredUsers();
     } catch (error) {
       showToast(error.message || 'Error al iniciar sesión');
     }
@@ -250,6 +264,7 @@ export default function HomePage() {
     setVaultForm(initialVaultForm);
     setSearchInput('');
     setVaultSearchInput('');
+    setRegisteredUsers([]);
     setActivePanel('linksPanel');
     showToast('Sesión cerrada');
   };
@@ -306,7 +321,7 @@ export default function HomePage() {
       setLinkForm(initialLinkForm);
       showToast(linkForm.editingId ? 'Enlace actualizado' : 'Enlace guardado en BD');
     } catch (error) {
-      showToast('Error al guardar enlace');
+      showToast(error?.message || 'Error al guardar enlace');
     }
   };
 
@@ -336,7 +351,7 @@ export default function HomePage() {
       await loadUserData(activeUser.id);
       showToast('Enlace eliminado');
     } catch (error) {
-      showToast('Error al eliminar');
+      showToast(error?.message || 'Error al eliminar');
     }
   };
 
@@ -351,7 +366,7 @@ export default function HomePage() {
       await loadUserData(activeUser.id);
       showToast('Imagen eliminada de la biblioteca');
     } catch (_error) {
-      showToast('Error al eliminar imagen');
+      showToast(_error?.message || 'Error al eliminar imagen');
     }
   };
 
@@ -384,7 +399,7 @@ export default function HomePage() {
       setVaultForm(initialVaultForm);
       showToast(vaultForm.editingId ? 'Credencial actualizada' : 'Credencial guardada en BD');
     } catch (error) {
-      showToast('Error al guardar credencial');
+      showToast(error?.message || 'Error al guardar credencial');
     }
   };
 
@@ -413,7 +428,7 @@ export default function HomePage() {
       await loadUserData(activeUser.id);
       showToast('Credencial eliminada');
     } catch (error) {
-      showToast('Error al eliminar');
+      showToast(error?.message || 'Error al eliminar');
     }
   };
 
@@ -556,6 +571,11 @@ export default function HomePage() {
                 <div className={`tab ${activePanel === 'imagesPanel' ? 'active' : ''}`} onClick={() => setActivePanel('imagesPanel')}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <ImageIcon size={16} /> Galería
+                  </div>
+                </div>
+                <div className={`tab ${activePanel === 'usersPanel' ? 'active' : ''}`} onClick={() => setActivePanel('usersPanel')}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <User size={16} /> Usuarios
                   </div>
                 </div>
               </div>
@@ -753,6 +773,39 @@ export default function HomePage() {
                     ))}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* USERS TAB */}
+            {activePanel === 'usersPanel' && (
+              <div className="animate-in">
+                <div className="glass-panel" style={{ background: 'rgba(255,255,255,0.02)', marginBottom: '1.5rem' }}>
+                  <h3 className="gradient-text" style={{ marginBottom: '0.5rem' }}>Usuarios registrados</h3>
+                  <p style={{ color: 'var(--text-secondary)' }}>Lista de cuentas guardadas en la tabla User de SQLite.</p>
+                </div>
+
+                <div className="items-grid">
+                  {registeredUsers.length === 0 ? (
+                    <div className="glass-panel" style={{ gridColumn: '1/-1', textAlign: 'center', padding: '4rem' }}>
+                      <User size={48} style={{ opacity: 0.2, marginBottom: '1rem' }} />
+                      <p>No hay usuarios registrados todavía.</p>
+                    </div>
+                  ) : (
+                    registeredUsers.map((user) => (
+                      <article className="card" key={user.id} style={{ padding: '1.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+                          <div>
+                            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.35rem' }}>ID #{user.id}</p>
+                            <h3 className="gradient-text">@{user.username}</h3>
+                          </div>
+                          <div className="glass-panel" style={{ padding: '0.75rem 1rem', borderRadius: '14px', background: 'rgba(255,255,255,0.04)' }}>
+                            <ShieldCheck size={18} className="accent-text" />
+                          </div>
+                        </div>
+                      </article>
+                    ))
+                  )}
+                </div>
               </div>
             )}
           </div>

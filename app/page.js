@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 
 const STORAGE_SESSION = 'linkatlas_session_v3';
+const LOCAL_APP_STORAGE = 'linkatlas_local_app_v1';
 const SESSION_DAYS = 30;
 
 const initialLinkForm = {
@@ -56,6 +57,139 @@ function now() {
 
 function daysToMs(days) {
   return days * 24 * 60 * 60 * 1000;
+}
+
+function emptyData() {
+  return { links: [], vault: [] };
+}
+
+function cloneData(data) {
+  return {
+    links: Array.isArray(data?.links) ? data.links : [],
+    vault: Array.isArray(data?.vault) ? data.vault : []
+  };
+}
+
+function hasData(data) {
+  return (data?.links?.length || 0) > 0 || (data?.vault?.length || 0) > 0;
+}
+
+function readLocalAppState() {
+  try {
+    const raw = localStorage.getItem(LOCAL_APP_STORAGE);
+    if (!raw) return { users: [], dataByUsername: {} };
+
+    const parsed = JSON.parse(raw);
+    return {
+      users: Array.isArray(parsed?.users) ? parsed.users : [],
+      dataByUsername: parsed?.dataByUsername && typeof parsed.dataByUsername === 'object'
+        ? parsed.dataByUsername
+        : {}
+    };
+  } catch {
+    return { users: [], dataByUsername: {} };
+  }
+}
+
+function writeLocalAppState(state) {
+  localStorage.setItem(LOCAL_APP_STORAGE, JSON.stringify(state));
+}
+
+function updateLocalAppState(updater) {
+  const current = readLocalAppState();
+  const next = updater(current) || current;
+  writeLocalAppState(next);
+  return next;
+}
+
+function createLocalUserId(username) {
+  return `local:${username}`;
+}
+
+function normalizeUserForView(user) {
+  if (!user) return null;
+  return {
+    id: user.id ?? createLocalUserId(user.username),
+    username: user.username
+  };
+}
+
+function isLocalUser(user) {
+  return String(user?.id || '').startsWith('local:');
+}
+
+function getLocalUser(username, password) {
+  const state = readLocalAppState();
+  return state.users.find((user) => user.username === username && user.password === password) || null;
+}
+
+function saveLocalUser(user) {
+  updateLocalAppState((state) => {
+    const users = state.users.filter((item) => item.username !== user.username);
+    return {
+      ...state,
+      users: [...users, user],
+    };
+  });
+}
+
+function getLocalData(username) {
+  const state = readLocalAppState();
+  return cloneData(state.dataByUsername?.[username]);
+}
+
+function saveLocalData(username, data) {
+  updateLocalAppState((state) => ({
+    ...state,
+    dataByUsername: {
+      ...state.dataByUsername,
+      [username]: cloneData(data),
+    },
+  }));
+}
+
+function upsertLinkInData(baseData, link) {
+  const data = cloneData(baseData);
+  const index = data.links.findIndex((item) => item.id === link.id);
+  if (index >= 0) {
+    data.links[index] = { ...data.links[index], ...link };
+  } else {
+    data.links.unshift(link);
+  }
+  return data;
+}
+
+function removeLinkFromData(baseData, id) {
+  const data = cloneData(baseData);
+  data.links = data.links.filter((item) => item.id !== id);
+  return data;
+}
+
+function clearLinkImageFromData(baseData, id) {
+  const data = cloneData(baseData);
+  data.links = data.links.map((item) => (
+    item.id === id
+      ? { ...item, imageDataUrl: null, imageUrl: null, updatedAt: new Date().toISOString() }
+      : item
+  ));
+  return data;
+}
+
+function upsertVaultInData(baseData, vaultEntry) {
+  const data = cloneData(baseData);
+  const index = data.vault.findIndex((item) => item.id === vaultEntry.id);
+  if (index >= 0) {
+    data.vault[index] = { ...data.vault[index], ...vaultEntry };
+  } else {
+    data.vault.unshift(vaultEntry);
+  }
+  return data;
+}
+
+function removeVaultFromData(baseData, id) {
+  const data = cloneData(baseData);
+  data.vault = data.vault.filter((item) => item.id !== id);
+  return data;
 }
 
 function setSession(user) {
@@ -119,12 +253,44 @@ export default function HomePage() {
     return () => clearTimeout(timer);
   }, [toast.visible]);
 
-  const loadUserData = async (userId) => {
+  const loadUserData = async (user) => {
+    const resolvedUser = normalizeUserForView(user || activeUser);
+
+    if (!resolvedUser?.username) {
+      setData(emptyData());
+      return;
+    }
+
+    const localData = getLocalData(resolvedUser.username);
+
+    if (isLocalUser(resolvedUser)) {
+      setData(localData);
+      return;
+    }
+
     try {
-      const dbData = await getUserData(userId);
-      setData({ links: dbData.links || [], vault: dbData.vault || [] });
-    } catch (e) {
-      showToast('Error cargando datos de la DB');
+      const dbData = await getUserData(resolvedUser.id);
+      const nextData = cloneData(dbData);
+
+      if (hasData(nextData)) {
+        setData(nextData);
+        saveLocalData(resolvedUser.username, nextData);
+        return;
+      }
+
+      if (hasData(localData)) {
+        setData(localData);
+        return;
+      }
+
+      setData(nextData);
+    } catch (_e) {
+      if (hasData(localData)) {
+        setData(localData);
+        return;
+      }
+
+      setData(emptyData());
     }
   };
 
@@ -207,9 +373,12 @@ export default function HomePage() {
 
     try {
       const user = await registerUser(username, password);
-      setActiveUser(user);
+      const normalized = normalizeUserForView(user);
+      setActiveUser(normalized);
       setSession(user);
-      setData({ links: [], vault: [] });
+      saveLocalUser({ id: createLocalUserId(username), username, password });
+      saveLocalData(username, emptyData());
+      setData(emptyData());
       setActivePanel('linksPanel');
       setRegisterForm({ username: '', password: '' });
       showToast('Cuenta creada en BD y sesión iniciada');
@@ -225,13 +394,24 @@ export default function HomePage() {
 
     try {
       const user = await getUser(username, password);
-      if (!user) {
-        showToast('Credenciales inválidas');
-        return;
+      if (user) {
+        const normalized = normalizeUserForView(user);
+        setActiveUser(normalized);
+        setSession(normalized);
+        saveLocalUser({ id: createLocalUserId(username), username, password });
+        await loadUserData(normalized);
+      } else {
+        const localUser = getLocalUser(username, password);
+        if (!localUser) {
+          showToast('Credenciales inválidas');
+          return;
+        }
+
+        const normalized = normalizeUserForView(localUser);
+        setActiveUser(normalized);
+        setSession(normalized);
+        await loadUserData(normalized);
       }
-      setActiveUser(user);
-      setSession(user);
-      await loadUserData(user.id);
       setActivePanel('linksPanel');
       setLoginForm({ username: '', password: '' });
       showToast('Sesión iniciada correctamente');
@@ -243,7 +423,7 @@ export default function HomePage() {
   const onLogout = () => {
     clearSession();
     setActiveUser(null);
-    setData({ links: [], vault: [] });
+    setData(emptyData());
     setRegisterForm({ username: '', password: '' });
     setLoginForm({ username: '', password: '' });
     setLinkForm(initialLinkForm);
@@ -293,20 +473,40 @@ export default function HomePage() {
     }
 
     try {
-      await saveLinkAction({
-        id: linkForm.editingId || null,
+      const existingLink = data.links.find((item) => item.id === linkForm.editingId);
+      const localLink = {
+        id: linkForm.editingId || existingLink?.id || globalThis.crypto?.randomUUID?.() || `${Date.now()}`,
         title,
         url,
         notes,
         keywords,
-        imageUrl: imageUrl || (linkForm.editingId ? data.links.find(l => l.id === linkForm.editingId)?.imageUrl : null)
-      }, activeUser.id);
-      
-      await loadUserData(activeUser.id);
+        imageUrl: imageUrl || existingLink?.imageUrl || null,
+        createdAt: existingLink?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      if (!isLocalUser(activeUser)) {
+        try {
+          await saveLinkAction({
+            id: linkForm.editingId || null,
+            title,
+            url,
+            notes,
+            keywords,
+            imageUrl: localLink.imageUrl
+          }, activeUser.id);
+        } catch (_serverError) {
+          // Mantengo la copia local aunque la DB temporal falle.
+        }
+      }
+
+      const nextData = upsertLinkInData(data, localLink);
+      setData(nextData);
+      saveLocalData(activeUser.username, nextData);
       setLinkForm(initialLinkForm);
-      showToast(linkForm.editingId ? 'Enlace actualizado' : 'Enlace guardado en BD');
+      showToast(linkForm.editingId ? 'Enlace actualizado' : 'Enlace guardado');
     } catch (error) {
-      showToast('Error al guardar enlace');
+      showToast(error?.message || 'Error al guardar enlace');
     }
   };
 
@@ -332,11 +532,20 @@ export default function HomePage() {
     if (!sure) return;
 
     try {
-      await deleteLinkAction(id, activeUser.id);
-      await loadUserData(activeUser.id);
+      if (!isLocalUser(activeUser)) {
+        try {
+          await deleteLinkAction(id, activeUser.id);
+        } catch (_serverError) {
+          // La copia local sigue siendo la fuente de verdad si la DB no responde.
+        }
+      }
+
+      const nextData = removeLinkFromData(data, id);
+      setData(nextData);
+      saveLocalData(activeUser.username, nextData);
       showToast('Enlace eliminado');
     } catch (error) {
-      showToast('Error al eliminar');
+      showToast(error?.message || 'Error al eliminar');
     }
   };
 
@@ -347,11 +556,20 @@ export default function HomePage() {
     if (!sure) return;
 
     try {
-      await removeLinkImageAction(id, activeUser.id);
-      await loadUserData(activeUser.id);
+      if (!isLocalUser(activeUser)) {
+        try {
+          await removeLinkImageAction(id, activeUser.id);
+        } catch (_serverError) {
+          // La copia local sigue siendo la fuente de verdad si la DB no responde.
+        }
+      }
+
+      const nextData = clearLinkImageFromData(data, id);
+      setData(nextData);
+      saveLocalData(activeUser.username, nextData);
       showToast('Imagen eliminada de la biblioteca');
     } catch (_error) {
-      showToast('Error al eliminar imagen');
+      showToast(_error?.message || 'Error al eliminar imagen');
     }
   };
 
@@ -371,20 +589,40 @@ export default function HomePage() {
     }
 
     try {
-      await saveVaultAction({
-        id: vaultForm.editingId || null,
+      const existingVault = data.vault.find((item) => item.id === vaultForm.editingId);
+      const localVaultEntry = {
+        id: vaultForm.editingId || existingVault?.id || globalThis.crypto?.randomUUID?.() || `${Date.now()}`,
         title,
         siteUrl,
         loginName,
         secretValue,
-        notes
-      }, activeUser.id);
-      
-      await loadUserData(activeUser.id);
+        notes,
+        createdAt: existingVault?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      if (!isLocalUser(activeUser)) {
+        try {
+          await saveVaultAction({
+            id: vaultForm.editingId || null,
+            title,
+            siteUrl,
+            loginName,
+            secretValue,
+            notes
+          }, activeUser.id);
+        } catch (_serverError) {
+          // Mantengo la copia local aunque la DB temporal falle.
+        }
+      }
+
+      const nextData = upsertVaultInData(data, localVaultEntry);
+      setData(nextData);
+      saveLocalData(activeUser.username, nextData);
       setVaultForm(initialVaultForm);
-      showToast(vaultForm.editingId ? 'Credencial actualizada' : 'Credencial guardada en BD');
+      showToast(vaultForm.editingId ? 'Credencial actualizada' : 'Credencial guardada');
     } catch (error) {
-      showToast('Error al guardar credencial');
+      showToast(error?.message || 'Error al guardar credencial');
     }
   };
 
@@ -409,11 +647,20 @@ export default function HomePage() {
     if (!sure) return;
 
     try {
-      await deleteVaultAction(id, activeUser.id);
-      await loadUserData(activeUser.id);
+      if (!isLocalUser(activeUser)) {
+        try {
+          await deleteVaultAction(id, activeUser.id);
+        } catch (_serverError) {
+          // La copia local sigue siendo la fuente de verdad si la DB no responde.
+        }
+      }
+
+      const nextData = removeVaultFromData(data, id);
+      setData(nextData);
+      saveLocalData(activeUser.username, nextData);
       showToast('Credencial eliminada');
     } catch (error) {
-      showToast('Error al eliminar');
+      showToast(error?.message || 'Error al eliminar');
     }
   };
 

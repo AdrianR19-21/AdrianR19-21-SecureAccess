@@ -102,15 +102,15 @@ function updateLocalAppState(updater) {
   return next;
 }
 
-function createLocalUserId(username) {
-  return `local:${username}`;
+function createLocalUserId(email) {
+  return `local:${email}`;
 }
 
 function normalizeUserForView(user) {
   if (!user) return null;
   return {
-    id: user.id ?? createLocalUserId(user.username),
-    username: user.username
+    id: user.id ?? createLocalUserId(user.email ?? user.username),
+    email: user.email ?? user.username
   };
 }
 
@@ -118,32 +118,32 @@ function isLocalUser(user) {
   return String(user?.id || '').startsWith('local:');
 }
 
-function getLocalUser(username, password) {
+function getLocalUser(email, password) {
   const state = readLocalAppState();
-  return state.users.find((user) => user.username === username && user.password === password) || null;
+  return state.users.find((user) => (user.email ?? user.username) === email && user.password === password) || null;
 }
 
 function saveLocalUser(user) {
   updateLocalAppState((state) => {
-    const users = state.users.filter((item) => item.username !== user.username);
+    const users = state.users.filter((item) => (item.email ?? item.username) !== user.email);
     return {
       ...state,
-      users: [...users, user],
+      users: [...users, { ...user, username: user.email }],
     };
   });
 }
 
-function getLocalData(username) {
+function getLocalData(email) {
   const state = readLocalAppState();
-  return cloneData(state.dataByUsername?.[username]);
+  return cloneData(state.dataByUsername?.[email]);
 }
 
-function saveLocalData(username, data) {
+function saveLocalData(email, data) {
   updateLocalAppState((state) => ({
     ...state,
     dataByUsername: {
       ...state.dataByUsername,
-      [username]: cloneData(data),
+      [email]: cloneData(data),
     },
   }));
 }
@@ -212,7 +212,7 @@ function getSession() {
       clearSession();
       return null;
     }
-    return session.user; // { id, username }
+    return session.user; // { id, email }
   } catch {
     return null;
   }
@@ -230,8 +230,8 @@ async function fileToDataUrl(file) {
 export default function HomePage() {
   const [activeUser, setActiveUser] = useState(null);
   const [activePanel, setActivePanel] = useState('linksPanel');
-  const [registerForm, setRegisterForm] = useState({ username: '', password: '' });
-  const [loginForm, setLoginForm] = useState({ username: '', password: '' });
+  const [registerForm, setRegisterForm] = useState({ email: '', password: '' });
+  const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   const [linkForm, setLinkForm] = useState(initialLinkForm);
   const [vaultForm, setVaultForm] = useState(initialVaultForm);
   const [searchInput, setSearchInput] = useState('');
@@ -256,12 +256,12 @@ export default function HomePage() {
   const loadUserData = async (user) => {
     const resolvedUser = normalizeUserForView(user || activeUser);
 
-    if (!resolvedUser?.username) {
+    if (!resolvedUser?.email) {
       setData(emptyData());
       return;
     }
 
-    const localData = getLocalData(resolvedUser.username);
+    const localData = getLocalData(resolvedUser.email);
 
     if (isLocalUser(resolvedUser)) {
       setData(localData);
@@ -274,7 +274,7 @@ export default function HomePage() {
 
       if (hasData(nextData)) {
         setData(nextData);
-        saveLocalData(resolvedUser.username, nextData);
+        saveLocalData(resolvedUser.email, nextData);
         return;
       }
 
@@ -297,8 +297,9 @@ export default function HomePage() {
   useEffect(() => {
     const user = getSession();
     if (user) {
-      setActiveUser(user);
-      loadUserData(user.id);
+      const normalized = normalizeUserForView(user);
+      setActiveUser(normalized);
+      loadUserData(normalized);
     }
   }, []);
 
@@ -363,24 +364,29 @@ export default function HomePage() {
 
   const onRegister = async (event) => {
     event.preventDefault();
-    const username = registerForm.username.trim();
+    const email = registerForm.email.trim();
     const password = registerForm.password;
 
-    if (!username || !password) {
-      showToast('Completa usuario y contraseña');
+    if (!email || !password) {
+      showToast('Completa correo y contraseña');
+      return;
+    }
+
+    if (!email.includes('@')) {
+      showToast('Introduce un correo válido');
       return;
     }
 
     try {
-      const user = await registerUser(username, password);
+      const user = await registerUser(email, password);
       const normalized = normalizeUserForView(user);
       setActiveUser(normalized);
       setSession(user);
-      saveLocalUser({ id: createLocalUserId(username), username, password });
-      saveLocalData(username, emptyData());
+      saveLocalUser({ id: createLocalUserId(email), email, password });
+      saveLocalData(email, emptyData());
       setData(emptyData());
       setActivePanel('linksPanel');
-      setRegisterForm({ username: '', password: '' });
+      setRegisterForm({ email: '', password: '' });
       showToast('Cuenta creada en BD y sesión iniciada');
     } catch (error) {
       showToast(error.message || 'Error al registrar');
@@ -389,19 +395,19 @@ export default function HomePage() {
 
   const onLogin = async (event) => {
     event.preventDefault();
-    const username = loginForm.username.trim();
+    const email = loginForm.email.trim();
     const password = loginForm.password;
 
     try {
-      const user = await getUser(username, password);
+      const user = await getUser(email, password);
       if (user) {
         const normalized = normalizeUserForView(user);
         setActiveUser(normalized);
         setSession(normalized);
-        saveLocalUser({ id: createLocalUserId(username), username, password });
+        saveLocalUser({ id: createLocalUserId(email), email, password });
         await loadUserData(normalized);
       } else {
-        const localUser = getLocalUser(username, password);
+        const localUser = getLocalUser(email, password);
         if (!localUser) {
           showToast('Credenciales inválidas');
           return;
@@ -413,7 +419,7 @@ export default function HomePage() {
         await loadUserData(normalized);
       }
       setActivePanel('linksPanel');
-      setLoginForm({ username: '', password: '' });
+      setLoginForm({ email: '', password: '' });
       showToast('Sesión iniciada correctamente');
     } catch (error) {
       showToast(error.message || 'Error al iniciar sesión');
@@ -424,8 +430,8 @@ export default function HomePage() {
     clearSession();
     setActiveUser(null);
     setData(emptyData());
-    setRegisterForm({ username: '', password: '' });
-    setLoginForm({ username: '', password: '' });
+    setRegisterForm({ email: '', password: '' });
+    setLoginForm({ email: '', password: '' });
     setLinkForm(initialLinkForm);
     setVaultForm(initialVaultForm);
     setSearchInput('');
@@ -502,7 +508,7 @@ export default function HomePage() {
 
       const nextData = upsertLinkInData(data, localLink);
       setData(nextData);
-      saveLocalData(activeUser.username, nextData);
+      saveLocalData(activeUser.email, nextData);
       await loadUserData(activeUser);
       setLinkForm(initialLinkForm);
       showToast(linkForm.editingId ? 'Enlace actualizado' : 'Enlace guardado');
@@ -543,7 +549,7 @@ export default function HomePage() {
 
       const nextData = removeLinkFromData(data, id);
       setData(nextData);
-      saveLocalData(activeUser.username, nextData);
+      saveLocalData(activeUser.email, nextData);
       showToast('Enlace eliminado');
     } catch (error) {
       showToast(error?.message || 'Error al eliminar');
@@ -567,7 +573,7 @@ export default function HomePage() {
 
       const nextData = clearLinkImageFromData(data, id);
       setData(nextData);
-      saveLocalData(activeUser.username, nextData);
+      saveLocalData(activeUser.email, nextData);
       showToast('Imagen eliminada de la biblioteca');
     } catch (_error) {
       showToast(_error?.message || 'Error al eliminar imagen');
@@ -619,7 +625,7 @@ export default function HomePage() {
 
       const nextData = upsertVaultInData(data, localVaultEntry);
       setData(nextData);
-      saveLocalData(activeUser.username, nextData);
+      saveLocalData(activeUser.email, nextData);
       await loadUserData(activeUser);
       setVaultForm(initialVaultForm);
       showToast(vaultForm.editingId ? 'Credencial actualizada' : 'Credencial guardada');
@@ -659,7 +665,7 @@ export default function HomePage() {
 
       const nextData = removeVaultFromData(data, id);
       setData(nextData);
-      saveLocalData(activeUser.username, nextData);
+      saveLocalData(activeUser.email, nextData);
       showToast('Credencial eliminada');
     } catch (error) {
       showToast(error?.message || 'Error al eliminar');
@@ -681,7 +687,7 @@ export default function HomePage() {
           <div>
             <h1 className="gradient-text">Antigravity Vault</h1>
             <p className="accent-text" style={{ fontSize: '0.8rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-              {activeUser ? `@${activeUser.username}` : 'SECURE ACCESS'}
+              {activeUser ? activeUser.email : 'SECURE ACCESS'}
             </p>
           </div>
         </div>
@@ -720,13 +726,13 @@ export default function HomePage() {
               <p style={{ color: 'var(--text-secondary)' }}>Empieza a organizar tu vida digital hoy mismo.</p>
               <form className="card-form" onSubmit={onRegister}>
                 <div className="input-group">
-                  <label>Usuario</label>
+                  <label>Correo</label>
                   <input
-                    type="text"
-                    placeholder="Tu nombre de usuario"
+                    type="email"
+                    placeholder="tu@correo.com"
                     required
-                    value={registerForm.username}
-                    onChange={(e) => setRegisterForm({ ...registerForm, username: e.target.value })}
+                    value={registerForm.email}
+                    onChange={(e) => setRegisterForm({ ...registerForm, email: e.target.value })}
                   />
                 </div>
                 <div className="input-group">
@@ -751,13 +757,13 @@ export default function HomePage() {
               <p style={{ color: 'var(--text-secondary)' }}>Bienvenido de nuevo. Introduce tus credenciales.</p>
               <form className="card-form" onSubmit={onLogin}>
                 <div className="input-group">
-                  <label>Usuario</label>
+                  <label>Correo</label>
                   <input
-                    type="text"
-                    placeholder="Tu usuario"
+                    type="email"
+                    placeholder="tu@correo.com"
                     required
-                    value={loginForm.username}
-                    onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })}
+                    value={loginForm.email}
+                    onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })}
                   />
                 </div>
                 <div className="input-group">
@@ -905,7 +911,7 @@ export default function HomePage() {
                       <input type="url" placeholder="https://..." value={vaultForm.siteUrl} onChange={(e) => setVaultForm({...vaultForm, siteUrl: e.target.value})} />
                     </div>
                     <div className="input-group">
-                      <label>Usuario / Login</label>
+                      <label>Correo electrónico / Login</label>
                       <input type="text" placeholder="adrian@email.com" value={vaultForm.loginName} onChange={(e) => setVaultForm({...vaultForm, loginName: e.target.value})} />
                     </div>
                     <div className="input-group">
@@ -951,7 +957,7 @@ export default function HomePage() {
                           )}
                           <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '12px', marginTop: '0.5rem' }}>
                             <div style={{ marginBottom: '0.5rem' }}>
-                              <label style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.2rem' }}>USUARIO</label>
+                              <label style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.2rem' }}>CORREO ELECTRÓNICO</label>
                               <code style={{ fontSize: '0.9rem', color: '#fff' }}>{entry.loginName || '---'}</code>
                             </div>
                             <div>

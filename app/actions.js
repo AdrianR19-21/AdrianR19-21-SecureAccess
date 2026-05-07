@@ -130,12 +130,12 @@ async function ensureLegacyPasswordMigration() {
   return passwordMigrationPromise;
 }
 
-export async function getUser(username, password) {
+export async function getUser(email, password) {
   await ensureDatabaseReady();
   await ensureLegacyPasswordMigration();
 
   const user = await prisma.user.findUnique({
-    where: { username },
+    where: { username: email },
   });
 
   if (user && verifyPassword(password, user.password)) {
@@ -146,28 +146,28 @@ export async function getUser(username, password) {
       });
     }
 
-    return { id: user.id, username: user.username };
+    return { id: user.id, email: user.username };
   }
   return null;
 }
 
-export async function registerUser(username, password) {
+export async function registerUser(email, password) {
   await ensureDatabaseReady();
   await ensureLegacyPasswordMigration();
 
   const existing = await prisma.user.findUnique({
-    where: { username },
+    where: { username: email },
   });
 
   if (existing) {
-    throw new Error('El usuario ya existe');
+    throw new Error('El correo ya existe');
   }
 
   const user = await prisma.user.create({
-    data: { username, password: hashPassword(password) },
+    data: { username: email, password: hashPassword(password) },
   });
 
-  return { id: user.id, username: user.username };
+  return { id: user.id, email: user.username };
 }
 
 export async function getUserData(userId) {

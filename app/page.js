@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   getUser,
   registerUser,
@@ -12,6 +13,7 @@ import {
   saveVaultAction,
   deleteVaultAction
 } from './actions';
+import { createSupabaseBrowserClient } from '../lib/supabase';
 import { 
   LogOut, 
   Plus, 
@@ -31,6 +33,7 @@ import {
 } from 'lucide-react';
 
 const STORAGE_SESSION = 'linkatlas_session_v3';
+const LOCAL_APP_STORAGE = 'linkatlas_local_app_v1';
 const SESSION_DAYS = 30;
 
 const initialLinkForm = {
@@ -59,6 +62,144 @@ function daysToMs(days) {
   return days * 24 * 60 * 60 * 1000;
 }
 
+function emptyData() {
+  return { links: [], vault: [] };
+}
+
+function cloneData(data) {
+  return {
+    links: Array.isArray(data?.links) ? data.links : [],
+    vault: Array.isArray(data?.vault) ? data.vault : []
+  };
+}
+
+function hasData(data) {
+  return (data?.links?.length || 0) > 0 || (data?.vault?.length || 0) > 0;
+}
+
+function readLocalAppState() {
+  try {
+    const raw = localStorage.getItem(LOCAL_APP_STORAGE);
+    if (!raw) return { users: [], dataByUsername: {} };
+
+    const parsed = JSON.parse(raw);
+    return {
+      users: Array.isArray(parsed?.users) ? parsed.users : [],
+      dataByUsername: parsed?.dataByUsername && typeof parsed.dataByUsername === 'object'
+        ? parsed.dataByUsername
+        : {}
+    };
+  } catch {
+    return { users: [], dataByUsername: {} };
+  }
+}
+
+function writeLocalAppState(state) {
+  localStorage.setItem(LOCAL_APP_STORAGE, JSON.stringify(state));
+}
+
+function updateLocalAppState(updater) {
+  const current = readLocalAppState();
+  const next = updater(current) || current;
+  writeLocalAppState(next);
+  return next;
+}
+
+function createLocalUserId(email) {
+  return `local:${email}`;
+}
+
+function normalizeUserForView(user) {
+  if (!user) return null;
+  return {
+    id: user.id ?? createLocalUserId(user.email ?? user.username),
+    email: user.email ?? user.username,
+    emailConfirmedAt: user.emailConfirmedAt ?? user.email_confirmed_at ?? null
+  };
+}
+
+function isVerifiedUser(user) {
+  return Boolean(user?.emailConfirmedAt);
+}
+
+function isLocalUser(user) {
+  return String(user?.id || '').startsWith('local:');
+}
+
+function getLocalUser(email, password) {
+  const state = readLocalAppState();
+  return state.users.find((user) => (user.email ?? user.username) === email && user.password === password) || null;
+}
+
+function saveLocalUser(user) {
+  updateLocalAppState((state) => {
+    const users = state.users.filter((item) => (item.email ?? item.username) !== user.email);
+    return {
+      ...state,
+      users: [...users, { ...user, username: user.email }],
+    };
+  });
+}
+
+function getLocalData(email) {
+  const state = readLocalAppState();
+  return cloneData(state.dataByUsername?.[email]);
+}
+
+function saveLocalData(email, data) {
+  updateLocalAppState((state) => ({
+    ...state,
+    dataByUsername: {
+      ...state.dataByUsername,
+      [email]: cloneData(data),
+    },
+  }));
+}
+
+function upsertLinkInData(baseData, link) {
+  const data = cloneData(baseData);
+  const index = data.links.findIndex((item) => item.id === link.id);
+  if (index >= 0) {
+    data.links[index] = { ...data.links[index], ...link };
+  } else {
+    data.links.unshift(link);
+  }
+  return data;
+}
+
+function removeLinkFromData(baseData, id) {
+  const data = cloneData(baseData);
+  data.links = data.links.filter((item) => item.id !== id);
+  return data;
+}
+
+function clearLinkImageFromData(baseData, id) {
+  const data = cloneData(baseData);
+  data.links = data.links.map((item) => (
+    item.id === id
+      ? { ...item, imageDataUrl: null, imageUrl: null, updatedAt: new Date().toISOString() }
+      : item
+  ));
+  return data;
+}
+
+function upsertVaultInData(baseData, vaultEntry) {
+  const data = cloneData(baseData);
+  const index = data.vault.findIndex((item) => item.id === vaultEntry.id);
+  if (index >= 0) {
+    data.vault[index] = { ...data.vault[index], ...vaultEntry };
+  } else {
+    data.vault.unshift(vaultEntry);
+  }
+  return data;
+}
+
+function removeVaultFromData(baseData, id) {
+  const data = cloneData(baseData);
+  data.vault = data.vault.filter((item) => item.id !== id);
+  return data;
+}
+
 function setSession(user) {
   localStorage.setItem(STORAGE_SESSION, JSON.stringify({
     user,
@@ -79,7 +220,7 @@ function getSession() {
       clearSession();
       return null;
     }
-    return session.user; // { id, username }
+    return session.user; // { id, email }
   } catch {
     return null;
   }
@@ -94,15 +235,38 @@ async function fileToDataUrl(file) {
   });
 }
 
+async function postJson(url, body) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(payload.error || 'La operación no se pudo completar');
+  }
+
+  return payload;
+}
+
 export default function HomePage() {
+  const router = useRouter();
+  const [supabase] = useState(() => createSupabaseBrowserClient());
   const [activeUser, setActiveUser] = useState(null);
   const [activePanel, setActivePanel] = useState('linksPanel');
-  const [registerForm, setRegisterForm] = useState({ username: '', password: '' });
-  const [loginForm, setLoginForm] = useState({ username: '', password: '' });
+  const [registerForm, setRegisterForm] = useState({ email: '', password: '' });
+  const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   const [linkForm, setLinkForm] = useState(initialLinkForm);
   const [vaultForm, setVaultForm] = useState(initialVaultForm);
   const [searchInput, setSearchInput] = useState('');
   const [vaultSearchInput, setVaultSearchInput] = useState('');
+  const [gallerySearchInput, setGallerySearchInput] = useState('');
+  const [galleryFilter, setGalleryFilter] = useState('all');
+  const [gallerySourceFilter, setGallerySourceFilter] = useState('links');
   const [data, setData] = useState({ links: [], vault: [] });
   const [registeredUsers, setRegisteredUsers] = useState([]);
   const [toast, setToast] = useState({ visible: false, message: '' });
@@ -121,14 +285,100 @@ export default function HomePage() {
     return () => clearTimeout(timer);
   }, [toast.visible]);
 
-  const loadUserData = async (userId) => {
+  const loadUserData = async (user) => {
+    const resolvedUser = normalizeUserForView(user || activeUser);
+
+    if (!resolvedUser?.email) {
+      setData(emptyData());
+      return;
+    }
+
+    const localData = getLocalData(resolvedUser.email);
+
     try {
-      const dbData = await getUserData(userId);
-      setData({ links: dbData.links || [], vault: dbData.vault || [] });
-    } catch (e) {
-      showToast('Error cargando datos de la DB');
+      const dbData = await getUserData(resolvedUser.email);
+      const nextData = cloneData(dbData);
+
+      if (hasData(nextData)) {
+        setData(nextData);
+        saveLocalData(resolvedUser.email, nextData);
+        return;
+      }
+
+      if (hasData(localData)) {
+        setData(localData);
+        return;
+      }
+
+      setData(nextData);
+    } catch (_e) {
+      if (hasData(localData)) {
+        setData(localData);
+        return;
+      }
+
+      setData(emptyData());
     }
   };
+
+  useEffect(() => {
+    if (!supabase) return undefined;
+
+    let mounted = true;
+
+    const syncSession = async () => {
+      const { data } = await supabase.auth.getSession();
+      if (!mounted) return;
+
+      const sessionUser = data.session?.user || null;
+      if (!sessionUser) {
+        setActiveUser(null);
+        setData(emptyData());
+        return;
+      }
+
+      const normalized = normalizeUserForView(sessionUser);
+      if (!isVerifiedUser(normalized)) {
+        await supabase.auth.signOut();
+        if (!mounted) return;
+        setActiveUser(null);
+        setData(emptyData());
+        return;
+      }
+
+      setActiveUser(normalized);
+      await loadUserData(normalized);
+    };
+
+    syncSession();
+
+    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!mounted) return;
+
+      if (!session?.user) {
+        setActiveUser(null);
+        setData(emptyData());
+        return;
+      }
+
+      const normalized = normalizeUserForView(session.user);
+      if (!isVerifiedUser(normalized)) {
+        await supabase.auth.signOut();
+        if (!mounted) return;
+        setActiveUser(null);
+        setData(emptyData());
+        return;
+      }
+
+      setActiveUser(normalized);
+      await loadUserData(normalized);
+    });
+
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
+  }, [supabase]);
 
   const loadRegisteredUsers = async () => {
     try {
@@ -140,11 +390,27 @@ export default function HomePage() {
   };
 
   useEffect(() => {
-    const user = getSession();
-    if (user) {
-      setActiveUser(user);
-      loadUserData(user.id);
-      loadRegisteredUsers();
+    // NO cargar sesión automáticamente en la visita inicial
+    // Solo mostrar login/registro hasta que el usuario se autentique explícitamente
+    loadRegisteredUsers();
+  }, []);
+
+  useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const verified = searchParams.get('verified');
+    const reset = searchParams.get('reset');
+
+    if (verified === 'ok') {
+      showToast('Correo verificado correctamente. Ya puedes iniciar sesión.');
+      window.history.replaceState({}, '', '/');
+    } else if (verified === 'invalid') {
+      showToast('El enlace de verificación no es válido o expiró.');
+      window.history.replaceState({}, '', '/');
+    }
+
+    if (reset === 'ok') {
+      showToast('Contraseña actualizada. Ya puedes entrar con la nueva clave.');
+      window.history.replaceState({}, '', '/');
     }
   }, []);
 
@@ -195,76 +461,134 @@ export default function HomePage() {
       .slice(0, 10);
   }, [data.links]);
 
-  const imageLibrary = useMemo(() => {
-    return data.links
-      .filter((item) => Boolean(item.imageUrl || item.imageDataUrl))
-      .map((item) => ({
+  const filteredGallery = useMemo(() => {
+    const query = gallerySearchInput.trim().toLowerCase();
+    const galleryItems = [
+      ...data.links
+        .filter((item) => Boolean(item.imageUrl || item.imageDataUrl))
+        .map((item) => ({
+          kind: 'link',
+          id: item.id,
+          title: item.title,
+          url: item.url,
+          notes: item.notes || '',
+          keywords: item.keywords || '',
+          imageUrl: item.imageUrl || item.imageDataUrl,
+          createdAt: item.createdAt,
+        })),
+      ...data.vault.map((item) => ({
+        kind: 'vault',
         id: item.id,
         title: item.title,
-        url: item.url,
-        imageUrl: item.imageUrl || item.imageDataUrl,
+        url: item.siteUrl || '',
+        notes: item.notes || '',
+        loginName: item.loginName || '',
+        secretValue: item.secretValue || '',
+        imageUrl: '',
         createdAt: item.createdAt,
-      }));
-  }, [data.links]);
+      }))
+    ];
+
+    return galleryItems.filter((item) => {
+      const matchesSource =
+        gallerySourceFilter === 'all' ||
+        (gallerySourceFilter === 'links' && item.kind === 'link') ||
+        (gallerySourceFilter === 'vault' && item.kind === 'vault');
+      const matchesText = !query || `${item.title || ''} ${item.url || ''} ${item.notes || ''} ${item.loginName || ''}`.toLowerCase().includes(query);
+      const hasUrl = Boolean(item.url);
+      const matchesFilter =
+        galleryFilter === 'all' ||
+        (galleryFilter === 'withUrl' && hasUrl) ||
+        (galleryFilter === 'withoutUrl' && !hasUrl);
+
+      return matchesSource && matchesText && matchesFilter;
+    });
+  }, [data.links, data.vault, galleryFilter, gallerySearchInput, gallerySourceFilter]);
 
   const onRegister = async (event) => {
     event.preventDefault();
-    const username = registerForm.username.trim();
+    if (isLogged) {
+      showToast('Cierra sesión antes de crear una cuenta');
+      return;
+    }
+    const email = registerForm.email.trim();
     const password = registerForm.password;
 
-    if (!username || !password) {
-      showToast('Completa usuario y contraseña');
+    if (!email || !password) {
+      showToast('Completa correo y contraseña');
+      return;
+    }
+
+    if (!email.includes('@')) {
+      showToast('Introduce un correo válido');
       return;
     }
 
     try {
-      const user = await registerUser(username, password);
-      setActiveUser(user);
-      setSession(user);
-      setData({ links: [], vault: [] });
-      setActivePanel('linksPanel');
-      setRegisterForm({ username: '', password: '' });
-      showToast('Cuenta creada en BD y sesión iniciada');
-      loadRegisteredUsers();
+      if (!supabase) {
+        throw new Error('Falta configurar Supabase Auth');
+      }
+
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: typeof window !== 'undefined' ? window.location.origin : undefined,
+        },
+      });
+
+      if (error) throw error;
+
+      setRegisterForm({ email: '', password: '' });
+      showToast('Cuenta creada. Revisa tu correo para verificarla antes de iniciar sesión.');
     } catch (error) {
-      showToast(error.message || 'Error al registrar');
+      showToast(error?.message || 'Error al registrar');
     }
   };
 
   const onLogin = async (event) => {
     event.preventDefault();
-    const username = loginForm.username.trim();
+    const email = loginForm.email.trim();
     const password = loginForm.password;
 
     try {
-      const user = await getUser(username, password);
-      if (!user) {
-        showToast('Credenciales inválidas');
-        return;
+      if (!supabase) {
+        throw new Error('Falta configurar Supabase Auth');
       }
-      setActiveUser(user);
-      setSession(user);
-      await loadUserData(user.id);
+
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+
+      const { data: authData } = await supabase.auth.getUser();
+      const currentUser = normalizeUserForView(authData.user);
+
+      if (!isVerifiedUser(currentUser)) {
+        await supabase.auth.signOut();
+        throw new Error('Debes verificar tu correo antes de iniciar sesión');
+      }
+
       setActivePanel('linksPanel');
-      setLoginForm({ username: '', password: '' });
+      setLoginForm({ email: '', password: '' });
       showToast('Sesión iniciada correctamente');
-      loadRegisteredUsers();
     } catch (error) {
       showToast(error.message || 'Error al iniciar sesión');
     }
   };
 
   const onLogout = () => {
-    clearSession();
+    if (supabase) {
+      supabase.auth.signOut();
+    }
     setActiveUser(null);
-    setData({ links: [], vault: [] });
-    setRegisterForm({ username: '', password: '' });
-    setLoginForm({ username: '', password: '' });
+    setData(emptyData());
+    setRegisterForm({ email: '', password: '' });
+    setLoginForm({ email: '', password: '' });
     setLinkForm(initialLinkForm);
     setVaultForm(initialVaultForm);
     setSearchInput('');
     setVaultSearchInput('');
-    setRegisteredUsers([]);
+    setGallerySearchInput('');
+    setGalleryFilter('all');
     setActivePanel('linksPanel');
     showToast('Sesión cerrada');
   };
@@ -308,18 +632,39 @@ export default function HomePage() {
     }
 
     try {
-      await saveLinkAction({
-        id: linkForm.editingId || null,
+      const existingLink = data.links.find((item) => item.id === linkForm.editingId);
+      const localLink = {
+        id: linkForm.editingId || existingLink?.id || globalThis.crypto?.randomUUID?.() || `${Date.now()}`,
         title,
         url,
         notes,
         keywords,
-        imageUrl: imageUrl || (linkForm.editingId ? data.links.find(l => l.id === linkForm.editingId)?.imageUrl : null)
-      }, activeUser.id);
-      
-      await loadUserData(activeUser.id);
+        imageUrl: imageUrl || existingLink?.imageUrl || null,
+        createdAt: existingLink?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      if (activeUser?.email) {
+        try {
+          await saveLinkAction({
+            id: linkForm.editingId || null,
+            title,
+            url,
+            notes,
+            keywords,
+            imageUrl: localLink.imageUrl
+          }, activeUser.email);
+        } catch (_serverError) {
+          // Mantengo la copia local aunque la DB temporal falle.
+        }
+      }
+
+      const nextData = upsertLinkInData(data, localLink);
+      setData(nextData);
+      saveLocalData(activeUser.email, nextData);
+      await loadUserData(activeUser);
       setLinkForm(initialLinkForm);
-      showToast(linkForm.editingId ? 'Enlace actualizado' : 'Enlace guardado en BD');
+      showToast(linkForm.editingId ? 'Enlace actualizado' : 'Enlace guardado');
     } catch (error) {
       showToast(error?.message || 'Error al guardar enlace');
     }
@@ -347,8 +692,17 @@ export default function HomePage() {
     if (!sure) return;
 
     try {
-      await deleteLinkAction(id, activeUser.id);
-      await loadUserData(activeUser.id);
+      if (activeUser?.email) {
+        try {
+          await deleteLinkAction(id, activeUser.email);
+        } catch (_serverError) {
+          // La copia local sigue siendo la fuente de verdad si la DB no responde.
+        }
+      }
+
+      const nextData = removeLinkFromData(data, id);
+      setData(nextData);
+      saveLocalData(activeUser.email, nextData);
       showToast('Enlace eliminado');
     } catch (error) {
       showToast(error?.message || 'Error al eliminar');
@@ -362,8 +716,17 @@ export default function HomePage() {
     if (!sure) return;
 
     try {
-      await removeLinkImageAction(id, activeUser.id);
-      await loadUserData(activeUser.id);
+      if (activeUser?.email) {
+        try {
+          await removeLinkImageAction(id, activeUser.email);
+        } catch (_serverError) {
+          // La copia local sigue siendo la fuente de verdad si la DB no responde.
+        }
+      }
+
+      const nextData = clearLinkImageFromData(data, id);
+      setData(nextData);
+      saveLocalData(activeUser.email, nextData);
       showToast('Imagen eliminada de la biblioteca');
     } catch (_error) {
       showToast(_error?.message || 'Error al eliminar imagen');
@@ -386,18 +749,39 @@ export default function HomePage() {
     }
 
     try {
-      await saveVaultAction({
-        id: vaultForm.editingId || null,
+      const existingVault = data.vault.find((item) => item.id === vaultForm.editingId);
+      const localVaultEntry = {
+        id: vaultForm.editingId || existingVault?.id || globalThis.crypto?.randomUUID?.() || `${Date.now()}`,
         title,
         siteUrl,
         loginName,
         secretValue,
-        notes
-      }, activeUser.id);
-      
-      await loadUserData(activeUser.id);
+        notes,
+        createdAt: existingVault?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      if (activeUser?.email) {
+        try {
+          await saveVaultAction({
+            id: vaultForm.editingId || null,
+            title,
+            siteUrl,
+            loginName,
+            secretValue,
+            notes
+          }, activeUser.email);
+        } catch (_serverError) {
+          // Mantengo la copia local aunque la DB temporal falle.
+        }
+      }
+
+      const nextData = upsertVaultInData(data, localVaultEntry);
+      setData(nextData);
+      saveLocalData(activeUser.email, nextData);
+      await loadUserData(activeUser);
       setVaultForm(initialVaultForm);
-      showToast(vaultForm.editingId ? 'Credencial actualizada' : 'Credencial guardada en BD');
+      showToast(vaultForm.editingId ? 'Credencial actualizada' : 'Credencial guardada');
     } catch (error) {
       showToast(error?.message || 'Error al guardar credencial');
     }
@@ -424,8 +808,17 @@ export default function HomePage() {
     if (!sure) return;
 
     try {
-      await deleteVaultAction(id, activeUser.id);
-      await loadUserData(activeUser.id);
+      if (activeUser?.email) {
+        try {
+          await deleteVaultAction(id, activeUser.email);
+        } catch (_serverError) {
+          // La copia local sigue siendo la fuente de verdad si la DB no responde.
+        }
+      }
+
+      const nextData = removeVaultFromData(data, id);
+      setData(nextData);
+      saveLocalData(activeUser.email, nextData);
       showToast('Credencial eliminada');
     } catch (error) {
       showToast(error?.message || 'Error al eliminar');
@@ -447,7 +840,7 @@ export default function HomePage() {
           <div>
             <h1 className="gradient-text">Antigravity Vault</h1>
             <p className="accent-text" style={{ fontSize: '0.8rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-              {activeUser ? `@${activeUser.username}` : 'SECURE ACCESS'}
+              {activeUser ? activeUser.email : 'SECURE ACCESS'}
             </p>
           </div>
         </div>
@@ -486,13 +879,13 @@ export default function HomePage() {
               <p style={{ color: 'var(--text-secondary)' }}>Empieza a organizar tu vida digital hoy mismo.</p>
               <form className="card-form" onSubmit={onRegister}>
                 <div className="input-group">
-                  <label>Usuario</label>
+                  <label>Correo</label>
                   <input
-                    type="text"
-                    placeholder="Tu nombre de usuario"
+                    type="email"
+                    placeholder="tu@correo.com"
                     required
-                    value={registerForm.username}
-                    onChange={(e) => setRegisterForm({ ...registerForm, username: e.target.value })}
+                    value={registerForm.email}
+                    onChange={(e) => setRegisterForm({ ...registerForm, email: e.target.value })}
                   />
                 </div>
                 <div className="input-group">
@@ -514,16 +907,16 @@ export default function HomePage() {
 
             <div className="card-form auth-login-sep">
               <h2 className="gradient-text">Acceder</h2>
-              <p style={{ color: 'var(--text-secondary)' }}>Bienvenido de nuevo. Introduce tus credenciales.</p>
+              <p style={{ color: 'var(--text-secondary)' }}>Bienvenido de nuevo. Solo podrás entrar desde este formulario.</p>
               <form className="card-form" onSubmit={onLogin}>
                 <div className="input-group">
-                  <label>Usuario</label>
+                  <label>Correo</label>
                   <input
-                    type="text"
-                    placeholder="Tu usuario"
+                    type="email"
+                    placeholder="tu@correo.com"
                     required
-                    value={loginForm.username}
-                    onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })}
+                    value={loginForm.email}
+                    onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })}
                   />
                 </div>
                 <div className="input-group">
@@ -541,6 +934,24 @@ export default function HomePage() {
                   Entrar
                 </button>
               </form>
+
+              <div className="glass-panel" style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(255,255,255,0.03)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
+                  <Key size={16} className="accent-text" />
+                  <strong>¿Olvidaste tu contraseña?</strong>
+                </div>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '0.85rem' }}>
+                  Te llevamos a una página aparte para pedir el correo de recuperación.
+                </p>
+                <button type="button" className="ghost" onClick={() => router.push('/reset-request')}>
+                  <Key size={16} />
+                  Cambiar contraseña
+                </button>
+              </div>
+
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.75rem' }}>
+                Si todavía no verificaste tu cuenta, revisa el correo que te enviamos al registrarte.
+              </p>
             </div>
           </div>
         )}
@@ -575,7 +986,7 @@ export default function HomePage() {
                 </div>
                 <div className={`tab ${activePanel === 'usersPanel' ? 'active' : ''}`} onClick={() => setActivePanel('usersPanel')}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <User size={16} /> Usuarios
+                    <User size={16} /> Cuenta
                   </div>
                 </div>
               </div>
@@ -641,9 +1052,6 @@ export default function HomePage() {
                         </div>
                         <div className="card-content">
                           <h3 className="card-title">{link.title || 'Sin título'}</h3>
-                          <a href={link.url} target="_blank" rel="noopener noreferrer" className="card-url">
-                            <ExternalLink size={14} /> {link.url}
-                          </a>
                           {link.notes && <p className="card-notes">{link.notes}</p>}
                           <div className="card-tags">
                             {link.keywords?.split(/\s+/).filter(Boolean).map(tag => (
@@ -676,7 +1084,7 @@ export default function HomePage() {
                       <input type="url" placeholder="https://..." value={vaultForm.siteUrl} onChange={(e) => setVaultForm({...vaultForm, siteUrl: e.target.value})} />
                     </div>
                     <div className="input-group">
-                      <label>Usuario / Login</label>
+                      <label>Correo electrónico / Login</label>
                       <input type="text" placeholder="adrian@email.com" value={vaultForm.loginName} onChange={(e) => setVaultForm({...vaultForm, loginName: e.target.value})} />
                     </div>
                     <div className="input-group">
@@ -722,7 +1130,7 @@ export default function HomePage() {
                           )}
                           <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '12px', marginTop: '0.5rem' }}>
                             <div style={{ marginBottom: '0.5rem' }}>
-                              <label style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.2rem' }}>USUARIO</label>
+                              <label style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.2rem' }}>CORREO ELECTRÓNICO</label>
                               <code style={{ fontSize: '0.9rem', color: '#fff' }}>{entry.loginName || '---'}</code>
                             </div>
                             <div>
@@ -746,27 +1154,105 @@ export default function HomePage() {
             {/* GALLERY TAB */}
             {activePanel === 'imagesPanel' && (
               <div className="animate-in">
-                {imageLibrary.length === 0 ? (
+                <div className="glass-panel" style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+                  <Search size={20} style={{ color: 'var(--accent-secondary)' }} />
+                  <input
+                    type="text"
+                    placeholder="Buscar en la galería..."
+                    value={gallerySearchInput}
+                    onChange={(e) => setGallerySearchInput(e.target.value)}
+                    style={{ background: 'transparent', border: 'none', padding: 0, flex: '1 1 240px' }}
+                  />
+                  <div className="tabs" style={{ marginLeft: 'auto' }}>
+                    <div className={`tab ${galleryFilter === 'all' ? 'active' : ''}`} onClick={() => setGalleryFilter('all')}>
+                      Todos
+                    </div>
+                    <div className={`tab ${galleryFilter === 'withUrl' ? 'active' : ''}`} onClick={() => setGalleryFilter('withUrl')}>
+                      Con URL
+                    </div>
+                    <div className={`tab ${galleryFilter === 'withoutUrl' ? 'active' : ''}`} onClick={() => setGalleryFilter('withoutUrl')}>
+                      Sin URL
+                    </div>
+                  </div>
+                </div>
+
+                <div className="glass-panel" style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+                  <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>Origen:</span>
+                  <div className="tabs">
+                    <div className={`tab ${gallerySourceFilter === 'links' ? 'active' : ''}`} onClick={() => setGallerySourceFilter('links')}>
+                      Enlaces
+                    </div>
+                    <div className={`tab ${gallerySourceFilter === 'vault' ? 'active' : ''}`} onClick={() => setGallerySourceFilter('vault')}>
+                      Vault
+                    </div>
+                    <div className={`tab ${gallerySourceFilter === 'all' ? 'active' : ''}`} onClick={() => setGallerySourceFilter('all')}>
+                      Todo
+                    </div>
+                  </div>
+                </div>
+
+                {filteredGallery.length === 0 ? (
                   <div className="glass-panel" style={{ textAlign: 'center', padding: '4rem' }}>
                     <ImageIcon size={48} style={{ opacity: 0.2, marginBottom: '1rem' }} />
-                    <p>No hay imágenes en la galería.</p>
+                    <p>No hay elementos en la galería.</p>
                   </div>
                 ) : (
                   <div className="items-grid">
-                    {imageLibrary.map(item => (
-                      <article className="card" key={item.id}>
-                        <div className="card-media" style={{ height: '260px' }}>
-                          <img src={item.imageUrl} alt={item.title} />
+                    {filteredGallery.map(item => (
+                      <article className="card" key={`${item.kind}-${item.id}`}>
+                        <div className="card-media" style={{ height: item.kind === 'vault' ? '180px' : '260px' }}>
+                          {item.kind === 'link' ? (
+                            item.url ? (
+                              <a href={item.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', width: '100%', height: '100%' }} title={`Abrir ${item.url}`}>
+                                <img src={item.imageUrl} alt={item.title} />
+                              </a>
+                            ) : (
+                              <img src={item.imageUrl} alt={item.title} />
+                            )
+                          ) : (
+                            <div style={{ opacity: 0.3, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                              <Lock size={48} />
+                              <span style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>VAULT</span>
+                            </div>
+                          )}
                         </div>
                         <div className="card-content">
-                          <h3 className="card-title">{item.title || 'Sin título'}</h3>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+                            <h3 className="card-title">{item.title || 'Sin título'}</h3>
+                            <span className="tag">{item.kind === 'vault' ? 'Vault' : 'Enlace'}</span>
+                          </div>
+                          {item.url && (
+                            <a href={item.url} target="_blank" rel="noopener noreferrer" className="card-url" style={{ marginTop: '0.25rem' }}>
+                              <ExternalLink size={14} /> {item.url}
+                            </a>
+                          )}
+                          {item.kind === 'vault' && item.loginName && (
+                            <p className="card-notes">{item.loginName}</p>
+                          )}
+                          {item.notes && <p className="card-notes">{item.notes}</p>}
+                          {item.kind === 'link' && item.keywords && (
+                            <div className="card-tags">
+                              {item.keywords.split(/\s+/).filter(Boolean).map((tag) => (
+                                <span className="tag" key={tag}>{tag}</span>
+                              ))}
+                            </div>
+                          )}
+                          {item.kind === 'vault' && item.secretValue && (
+                            <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '12px', marginTop: '0.5rem' }}>
+                              <label style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.2rem' }}>CONTRASEÑA</label>
+                              <code style={{ fontSize: '1rem', color: 'var(--accent-secondary)', fontWeight: 700 }}>{item.secretValue}</code>
+                            </div>
+                          )}
                           <div className="card-footer">
-                            <button className="ghost" onClick={() => { onEditLink(item.id); setActivePanel('linksPanel'); }}>
-                              <Search size={16} /> Ver Detalles
-                            </button>
-                            <button className="delete" style={{ padding: '0.5rem' }} onClick={() => onRemoveLinkImage(item.id)}>
-                              <Trash2 size={16} />
-                            </button>
+                            {item.kind === 'vault' ? (
+                              <button className="delete" style={{ padding: '0.5rem' }} onClick={() => onDeleteVault(item.id)}>
+                                <Trash2 size={16} />
+                              </button>
+                            ) : (
+                              <button className="delete" style={{ padding: '0.5rem' }} onClick={() => onRemoveLinkImage(item.id)}>
+                                <Trash2 size={16} />
+                              </button>
+                            )}
                           </div>
                         </div>
                       </article>
@@ -785,26 +1271,20 @@ export default function HomePage() {
                 </div>
 
                 <div className="items-grid">
-                  {registeredUsers.length === 0 ? (
-                    <div className="glass-panel" style={{ gridColumn: '1/-1', textAlign: 'center', padding: '4rem' }}>
-                      <User size={48} style={{ opacity: 0.2, marginBottom: '1rem' }} />
-                      <p>No hay usuarios registrados todavía.</p>
+                  <article className="card" style={{ padding: '1.5rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+                      <div>
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.35rem' }}>Sesión activa</p>
+                        <h3 className="gradient-text">{activeUser?.email || 'Sin sesión'}</h3>
+                        <p style={{ color: activeUser?.emailConfirmedAt ? 'var(--accent-secondary)' : 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '0.35rem' }}>
+                          {activeUser?.emailConfirmedAt ? 'Correo verificado' : 'Verificación pendiente'}
+                        </p>
+                      </div>
+                      <div className="glass-panel" style={{ padding: '0.75rem 1rem', borderRadius: '14px', background: 'rgba(255,255,255,0.04)' }}>
+                        <ShieldCheck size={18} className="accent-text" />
+                      </div>
                     </div>
-                  ) : (
-                    registeredUsers.map((user) => (
-                      <article className="card" key={user.id} style={{ padding: '1.5rem' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
-                          <div>
-                            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.35rem' }}>ID #{user.id}</p>
-                            <h3 className="gradient-text">@{user.username}</h3>
-                          </div>
-                          <div className="glass-panel" style={{ padding: '0.75rem 1rem', borderRadius: '14px', background: 'rgba(255,255,255,0.04)' }}>
-                            <ShieldCheck size={18} className="accent-text" />
-                          </div>
-                        </div>
-                      </article>
-                    ))
-                  )}
+                  </article>
                 </div>
               </div>
             )}

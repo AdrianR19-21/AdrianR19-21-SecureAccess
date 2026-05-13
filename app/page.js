@@ -1,39 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import {
-  getUser,
-  registerUser,
-  getRegisteredUsers,
-  getUserData,
-  saveLinkAction,
-  deleteLinkAction,
-  removeLinkImageAction,
-  saveVaultAction,
-  deleteVaultAction
-} from './actions';
-import { createSupabaseBrowserClient } from '../lib/supabase';
-import { 
-  LogOut, 
-  Plus, 
-  Search, 
-  Trash2, 
-  Edit3, 
-  ExternalLink, 
-  Lock, 
-  Link as LinkIcon, 
-  Image as ImageIcon,
-  User,
-  ShieldCheck,
-  Zap,
-  LayoutGrid,
-  Info,
-  Key
-} from 'lucide-react';
+import { getUser, registerUser, getUserData, saveLinkAction, deleteLinkAction, removeLinkImageAction, saveVaultAction, deleteVaultAction } from './actions';
+import { LogOut, Plus, Search, Trash2, Edit3, ExternalLink, Lock, Link as LinkIcon, Image as ImageIcon, User, ShieldCheck, Zap, LayoutGrid, Info, Key, Sparkles, Activity, ShieldAlert, BadgeCheck, Fingerprint, ServerCog, ArrowRight } from 'lucide-react';
 
 const STORAGE_SESSION = 'linkatlas_session_v3';
-const LOCAL_APP_STORAGE = 'linkatlas_local_app_v1';
 const SESSION_DAYS = 30;
 
 const initialLinkForm = {
@@ -54,150 +25,30 @@ const initialVaultForm = {
   notes: ''
 };
 
+const heroMetrics = [
+  { value: '24/7', label: 'Control visual y acceso' },
+  { value: '3 capas', label: 'Enlaces, vault e imágenes' },
+  { value: 'BD', label: 'Persistencia centralizada' }
+];
+
+const heroHighlights = [
+  'Sesión privada con control local',
+  'Acceso rápido con diseño de consola',
+  'Vista clara para enlaces, vault y galería'
+];
+
+const securityChecklist = [
+  'Verificación de sesión persistente',
+  'Organización por paneles separada',
+  'Carga y edición sin salir del dashboard'
+];
+
 function now() {
   return Date.now();
 }
 
 function daysToMs(days) {
   return days * 24 * 60 * 60 * 1000;
-}
-
-function emptyData() {
-  return { links: [], vault: [] };
-}
-
-function cloneData(data) {
-  return {
-    links: Array.isArray(data?.links) ? data.links : [],
-    vault: Array.isArray(data?.vault) ? data.vault : []
-  };
-}
-
-function hasData(data) {
-  return (data?.links?.length || 0) > 0 || (data?.vault?.length || 0) > 0;
-}
-
-function readLocalAppState() {
-  try {
-    const raw = localStorage.getItem(LOCAL_APP_STORAGE);
-    if (!raw) return { users: [], dataByUsername: {} };
-
-    const parsed = JSON.parse(raw);
-    return {
-      users: Array.isArray(parsed?.users) ? parsed.users : [],
-      dataByUsername: parsed?.dataByUsername && typeof parsed.dataByUsername === 'object'
-        ? parsed.dataByUsername
-        : {}
-    };
-  } catch {
-    return { users: [], dataByUsername: {} };
-  }
-}
-
-function writeLocalAppState(state) {
-  localStorage.setItem(LOCAL_APP_STORAGE, JSON.stringify(state));
-}
-
-function updateLocalAppState(updater) {
-  const current = readLocalAppState();
-  const next = updater(current) || current;
-  writeLocalAppState(next);
-  return next;
-}
-
-function createLocalUserId(email) {
-  return `local:${email}`;
-}
-
-function normalizeUserForView(user) {
-  if (!user) return null;
-  return {
-    id: user.id ?? createLocalUserId(user.email ?? user.username),
-    email: user.email ?? user.username,
-    emailConfirmedAt: user.emailConfirmedAt ?? user.email_confirmed_at ?? null
-  };
-}
-
-function isVerifiedUser(user) {
-  return Boolean(user?.emailConfirmedAt);
-}
-
-function isLocalUser(user) {
-  return String(user?.id || '').startsWith('local:');
-}
-
-function getLocalUser(email, password) {
-  const state = readLocalAppState();
-  return state.users.find((user) => (user.email ?? user.username) === email && user.password === password) || null;
-}
-
-function saveLocalUser(user) {
-  updateLocalAppState((state) => {
-    const users = state.users.filter((item) => (item.email ?? item.username) !== user.email);
-    return {
-      ...state,
-      users: [...users, { ...user, username: user.email }],
-    };
-  });
-}
-
-function getLocalData(email) {
-  const state = readLocalAppState();
-  return cloneData(state.dataByUsername?.[email]);
-}
-
-function saveLocalData(email, data) {
-  updateLocalAppState((state) => ({
-    ...state,
-    dataByUsername: {
-      ...state.dataByUsername,
-      [email]: cloneData(data),
-    },
-  }));
-}
-
-function upsertLinkInData(baseData, link) {
-  const data = cloneData(baseData);
-  const index = data.links.findIndex((item) => item.id === link.id);
-  if (index >= 0) {
-    data.links[index] = { ...data.links[index], ...link };
-  } else {
-    data.links.unshift(link);
-  }
-  return data;
-}
-
-function removeLinkFromData(baseData, id) {
-  const data = cloneData(baseData);
-  data.links = data.links.filter((item) => item.id !== id);
-  return data;
-}
-
-function clearLinkImageFromData(baseData, id) {
-  const data = cloneData(baseData);
-  data.links = data.links.map((item) => (
-    item.id === id
-      ? { ...item, imageDataUrl: null, imageUrl: null, updatedAt: new Date().toISOString() }
-      : item
-  ));
-  return data;
-}
-
-function upsertVaultInData(baseData, vaultEntry) {
-  const data = cloneData(baseData);
-  const index = data.vault.findIndex((item) => item.id === vaultEntry.id);
-  if (index >= 0) {
-    data.vault[index] = { ...data.vault[index], ...vaultEntry };
-  } else {
-    data.vault.unshift(vaultEntry);
-  }
-  return data;
-}
-
-function removeVaultFromData(baseData, id) {
-  const data = cloneData(baseData);
-  data.vault = data.vault.filter((item) => item.id !== id);
-  return data;
 }
 
 function setSession(user) {
@@ -220,7 +71,7 @@ function getSession() {
       clearSession();
       return null;
     }
-    return session.user; // { id, email }
+    return session.user; // { id, username }
   } catch {
     return null;
   }
@@ -235,40 +86,16 @@ async function fileToDataUrl(file) {
   });
 }
 
-async function postJson(url, body) {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(payload.error || 'La operación no se pudo completar');
-  }
-
-  return payload;
-}
-
 export default function HomePage() {
-  const router = useRouter();
-  const [supabase] = useState(() => createSupabaseBrowserClient());
   const [activeUser, setActiveUser] = useState(null);
   const [activePanel, setActivePanel] = useState('linksPanel');
-  const [registerForm, setRegisterForm] = useState({ email: '', password: '' });
-  const [loginForm, setLoginForm] = useState({ email: '', password: '' });
+  const [registerForm, setRegisterForm] = useState({ username: '', password: '' });
+  const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   const [linkForm, setLinkForm] = useState(initialLinkForm);
   const [vaultForm, setVaultForm] = useState(initialVaultForm);
   const [searchInput, setSearchInput] = useState('');
   const [vaultSearchInput, setVaultSearchInput] = useState('');
-  const [gallerySearchInput, setGallerySearchInput] = useState('');
-  const [galleryFilter, setGalleryFilter] = useState('all');
-  const [gallerySourceFilter, setGallerySourceFilter] = useState('links');
   const [data, setData] = useState({ links: [], vault: [] });
-  const [registeredUsers, setRegisteredUsers] = useState([]);
   const [toast, setToast] = useState({ visible: false, message: '' });
 
   const isLogged = Boolean(activeUser);
@@ -285,132 +112,20 @@ export default function HomePage() {
     return () => clearTimeout(timer);
   }, [toast.visible]);
 
-  const loadUserData = async (user) => {
-    const resolvedUser = normalizeUserForView(user || activeUser);
-
-    if (!resolvedUser?.email) {
-      setData(emptyData());
-      return;
-    }
-
-    const localData = getLocalData(resolvedUser.email);
-
+  const loadUserData = async (userId) => {
     try {
-      const dbData = await getUserData(resolvedUser.email);
-      const nextData = cloneData(dbData);
-
-      if (hasData(nextData)) {
-        setData(nextData);
-        saveLocalData(resolvedUser.email, nextData);
-        return;
-      }
-
-      if (hasData(localData)) {
-        setData(localData);
-        return;
-      }
-
-      setData(nextData);
-    } catch (_e) {
-      if (hasData(localData)) {
-        setData(localData);
-        return;
-      }
-
-      setData(emptyData());
+      const dbData = await getUserData(userId);
+      setData({ links: dbData.links || [], vault: dbData.vault || [] });
+    } catch (e) {
+      showToast('Error cargando datos de la DB');
     }
   };
 
   useEffect(() => {
-    if (!supabase) return undefined;
-
-    let mounted = true;
-
-    const syncSession = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (!mounted) return;
-
-      const sessionUser = data.session?.user || null;
-      if (!sessionUser) {
-        setActiveUser(null);
-        setData(emptyData());
-        return;
-      }
-
-      const normalized = normalizeUserForView(sessionUser);
-      if (!isVerifiedUser(normalized)) {
-        await supabase.auth.signOut();
-        if (!mounted) return;
-        setActiveUser(null);
-        setData(emptyData());
-        return;
-      }
-
-      setActiveUser(normalized);
-      await loadUserData(normalized);
-    };
-
-    syncSession();
-
-    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (!mounted) return;
-
-      if (!session?.user) {
-        setActiveUser(null);
-        setData(emptyData());
-        return;
-      }
-
-      const normalized = normalizeUserForView(session.user);
-      if (!isVerifiedUser(normalized)) {
-        await supabase.auth.signOut();
-        if (!mounted) return;
-        setActiveUser(null);
-        setData(emptyData());
-        return;
-      }
-
-      setActiveUser(normalized);
-      await loadUserData(normalized);
-    });
-
-    return () => {
-      mounted = false;
-      listener.subscription.unsubscribe();
-    };
-  }, [supabase]);
-
-  const loadRegisteredUsers = async () => {
-    try {
-      const users = await getRegisteredUsers();
-      setRegisteredUsers(users || []);
-    } catch (_error) {
-      showToast('Error cargando usuarios registrados');
-    }
-  };
-
-  useEffect(() => {
-    // NO cargar sesión automáticamente en la visita inicial
-    // Solo mostrar login/registro hasta que el usuario se autentique explícitamente
-    loadRegisteredUsers();
-  }, []);
-
-  useEffect(() => {
-    const searchParams = new URLSearchParams(window.location.search);
-    const verified = searchParams.get('verified');
-    const reset = searchParams.get('reset');
-
-    if (verified === 'ok') {
-      showToast('Correo verificado correctamente. Ya puedes iniciar sesión.');
-      window.history.replaceState({}, '', '/');
-    } else if (verified === 'invalid') {
-      showToast('El enlace de verificación no es válido o expiró.');
-      window.history.replaceState({}, '', '/');
-    }
-
-    if (reset === 'ok') {
-      showToast('Contraseña actualizada. Ya puedes entrar con la nueva clave.');
-      window.history.replaceState({}, '', '/');
+    const user = getSession();
+    if (user) {
+      setActiveUser(user);
+      loadUserData(user.id);
     }
   }, []);
 
@@ -461,134 +176,80 @@ export default function HomePage() {
       .slice(0, 10);
   }, [data.links]);
 
-  const filteredGallery = useMemo(() => {
-    const query = gallerySearchInput.trim().toLowerCase();
-    const galleryItems = [
-      ...data.links
-        .filter((item) => Boolean(item.imageUrl || item.imageDataUrl))
-        .map((item) => ({
-          kind: 'link',
-          id: item.id,
-          title: item.title,
-          url: item.url,
-          notes: item.notes || '',
-          keywords: item.keywords || '',
-          imageUrl: item.imageUrl || item.imageDataUrl,
-          createdAt: item.createdAt,
-        })),
-      ...data.vault.map((item) => ({
-        kind: 'vault',
+  const imageLibrary = useMemo(() => {
+    return data.links
+      .filter((item) => Boolean(item.imageUrl || item.imageDataUrl))
+      .map((item) => ({
         id: item.id,
         title: item.title,
-        url: item.siteUrl || '',
-        notes: item.notes || '',
-        loginName: item.loginName || '',
-        secretValue: item.secretValue || '',
-        imageUrl: '',
+        url: item.url,
+        imageUrl: item.imageUrl || item.imageDataUrl,
         createdAt: item.createdAt,
-      }))
-    ];
+      }));
+  }, [data.links]);
 
-    return galleryItems.filter((item) => {
-      const matchesSource =
-        gallerySourceFilter === 'all' ||
-        (gallerySourceFilter === 'links' && item.kind === 'link') ||
-        (gallerySourceFilter === 'vault' && item.kind === 'vault');
-      const matchesText = !query || `${item.title || ''} ${item.url || ''} ${item.notes || ''} ${item.loginName || ''}`.toLowerCase().includes(query);
-      const hasUrl = Boolean(item.url);
-      const matchesFilter =
-        galleryFilter === 'all' ||
-        (galleryFilter === 'withUrl' && hasUrl) ||
-        (galleryFilter === 'withoutUrl' && !hasUrl);
-
-      return matchesSource && matchesText && matchesFilter;
-    });
-  }, [data.links, data.vault, galleryFilter, gallerySearchInput, gallerySourceFilter]);
+  const totalItems = data.links.length + data.vault.length;
+  const dashboardStats = [
+    { value: data.links.length, label: 'Enlaces activos' },
+    { value: data.vault.length, label: 'Credenciales guardadas' },
+    { value: imageLibrary.length, label: 'Imágenes vinculadas' }
+  ];
 
   const onRegister = async (event) => {
     event.preventDefault();
-    if (isLogged) {
-      showToast('Cierra sesión antes de crear una cuenta');
-      return;
-    }
-    const email = registerForm.email.trim();
+    const username = registerForm.username.trim();
     const password = registerForm.password;
 
-    if (!email || !password) {
-      showToast('Completa correo y contraseña');
-      return;
-    }
-
-    if (!email.includes('@')) {
-      showToast('Introduce un correo válido');
+    if (!username || !password) {
+      showToast('Completa usuario y contraseña');
       return;
     }
 
     try {
-      if (!supabase) {
-        throw new Error('Falta configurar Supabase Auth');
-      }
-
-      const { error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          emailRedirectTo: typeof window !== 'undefined' ? window.location.origin : undefined,
-        },
-      });
-
-      if (error) throw error;
-
-      setRegisterForm({ email: '', password: '' });
-      showToast('Cuenta creada. Revisa tu correo para verificarla antes de iniciar sesión.');
+      const user = await registerUser(username, password);
+      setActiveUser(user);
+      setSession(user);
+      setData({ links: [], vault: [] });
+      setActivePanel('linksPanel');
+      setRegisterForm({ username: '', password: '' });
+      showToast('Cuenta creada en BD y sesión iniciada');
     } catch (error) {
-      showToast(error?.message || 'Error al registrar');
+      showToast(error.message || 'Error al registrar');
     }
   };
 
   const onLogin = async (event) => {
     event.preventDefault();
-    const email = loginForm.email.trim();
+    const username = loginForm.username.trim();
     const password = loginForm.password;
 
     try {
-      if (!supabase) {
-        throw new Error('Falta configurar Supabase Auth');
+      const user = await getUser(username, password);
+      if (!user) {
+        showToast('Credenciales inválidas');
+        return;
       }
-
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) throw error;
-
-      const { data: authData } = await supabase.auth.getUser();
-      const currentUser = normalizeUserForView(authData.user);
-
-      if (!isVerifiedUser(currentUser)) {
-        await supabase.auth.signOut();
-        throw new Error('Debes verificar tu correo antes de iniciar sesión');
-      }
-
+      setActiveUser(user);
+      setSession(user);
+      await loadUserData(user.id);
       setActivePanel('linksPanel');
-      setLoginForm({ email: '', password: '' });
+      setLoginForm({ username: '', password: '' });
       showToast('Sesión iniciada correctamente');
     } catch (error) {
-      showToast(error.message || 'Error al iniciar sesión');
+      showToast('Error al iniciar sesión');
     }
   };
 
   const onLogout = () => {
-    if (supabase) {
-      supabase.auth.signOut();
-    }
+    clearSession();
     setActiveUser(null);
-    setData(emptyData());
-    setRegisterForm({ email: '', password: '' });
-    setLoginForm({ email: '', password: '' });
+    setData({ links: [], vault: [] });
+    setRegisterForm({ username: '', password: '' });
+    setLoginForm({ username: '', password: '' });
     setLinkForm(initialLinkForm);
     setVaultForm(initialVaultForm);
     setSearchInput('');
     setVaultSearchInput('');
-    setGallerySearchInput('');
-    setGalleryFilter('all');
     setActivePanel('linksPanel');
     showToast('Sesión cerrada');
   };
@@ -632,41 +293,20 @@ export default function HomePage() {
     }
 
     try {
-      const existingLink = data.links.find((item) => item.id === linkForm.editingId);
-      const localLink = {
-        id: linkForm.editingId || existingLink?.id || globalThis.crypto?.randomUUID?.() || `${Date.now()}`,
+      await saveLinkAction({
+        id: linkForm.editingId || null,
         title,
         url,
         notes,
         keywords,
-        imageUrl: imageUrl || existingLink?.imageUrl || null,
-        createdAt: existingLink?.createdAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-
-      if (activeUser?.email) {
-        try {
-          await saveLinkAction({
-            id: linkForm.editingId || null,
-            title,
-            url,
-            notes,
-            keywords,
-            imageUrl: localLink.imageUrl
-          }, activeUser.email);
-        } catch (_serverError) {
-          // Mantengo la copia local aunque la DB temporal falle.
-        }
-      }
-
-      const nextData = upsertLinkInData(data, localLink);
-      setData(nextData);
-      saveLocalData(activeUser.email, nextData);
-      await loadUserData(activeUser);
+        imageUrl: imageUrl || (linkForm.editingId ? data.links.find(l => l.id === linkForm.editingId)?.imageUrl : null)
+      }, activeUser.id);
+      
+      await loadUserData(activeUser.id);
       setLinkForm(initialLinkForm);
-      showToast(linkForm.editingId ? 'Enlace actualizado' : 'Enlace guardado');
+      showToast(linkForm.editingId ? 'Enlace actualizado' : 'Enlace guardado en BD');
     } catch (error) {
-      showToast(error?.message || 'Error al guardar enlace');
+      showToast('Error al guardar enlace');
     }
   };
 
@@ -692,20 +332,11 @@ export default function HomePage() {
     if (!sure) return;
 
     try {
-      if (activeUser?.email) {
-        try {
-          await deleteLinkAction(id, activeUser.email);
-        } catch (_serverError) {
-          // La copia local sigue siendo la fuente de verdad si la DB no responde.
-        }
-      }
-
-      const nextData = removeLinkFromData(data, id);
-      setData(nextData);
-      saveLocalData(activeUser.email, nextData);
+      await deleteLinkAction(id, activeUser.id);
+      await loadUserData(activeUser.id);
       showToast('Enlace eliminado');
     } catch (error) {
-      showToast(error?.message || 'Error al eliminar');
+      showToast('Error al eliminar');
     }
   };
 
@@ -716,20 +347,11 @@ export default function HomePage() {
     if (!sure) return;
 
     try {
-      if (activeUser?.email) {
-        try {
-          await removeLinkImageAction(id, activeUser.email);
-        } catch (_serverError) {
-          // La copia local sigue siendo la fuente de verdad si la DB no responde.
-        }
-      }
-
-      const nextData = clearLinkImageFromData(data, id);
-      setData(nextData);
-      saveLocalData(activeUser.email, nextData);
+      await removeLinkImageAction(id, activeUser.id);
+      await loadUserData(activeUser.id);
       showToast('Imagen eliminada de la biblioteca');
     } catch (_error) {
-      showToast(_error?.message || 'Error al eliminar imagen');
+      showToast('Error al eliminar imagen');
     }
   };
 
@@ -749,41 +371,20 @@ export default function HomePage() {
     }
 
     try {
-      const existingVault = data.vault.find((item) => item.id === vaultForm.editingId);
-      const localVaultEntry = {
-        id: vaultForm.editingId || existingVault?.id || globalThis.crypto?.randomUUID?.() || `${Date.now()}`,
+      await saveVaultAction({
+        id: vaultForm.editingId || null,
         title,
         siteUrl,
         loginName,
         secretValue,
-        notes,
-        createdAt: existingVault?.createdAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-
-      if (activeUser?.email) {
-        try {
-          await saveVaultAction({
-            id: vaultForm.editingId || null,
-            title,
-            siteUrl,
-            loginName,
-            secretValue,
-            notes
-          }, activeUser.email);
-        } catch (_serverError) {
-          // Mantengo la copia local aunque la DB temporal falle.
-        }
-      }
-
-      const nextData = upsertVaultInData(data, localVaultEntry);
-      setData(nextData);
-      saveLocalData(activeUser.email, nextData);
-      await loadUserData(activeUser);
+        notes
+      }, activeUser.id);
+      
+      await loadUserData(activeUser.id);
       setVaultForm(initialVaultForm);
-      showToast(vaultForm.editingId ? 'Credencial actualizada' : 'Credencial guardada');
+      showToast(vaultForm.editingId ? 'Credencial actualizada' : 'Credencial guardada en BD');
     } catch (error) {
-      showToast(error?.message || 'Error al guardar credencial');
+      showToast('Error al guardar credencial');
     }
   };
 
@@ -808,20 +409,11 @@ export default function HomePage() {
     if (!sure) return;
 
     try {
-      if (activeUser?.email) {
-        try {
-          await deleteVaultAction(id, activeUser.email);
-        } catch (_serverError) {
-          // La copia local sigue siendo la fuente de verdad si la DB no responde.
-        }
-      }
-
-      const nextData = removeVaultFromData(data, id);
-      setData(nextData);
-      saveLocalData(activeUser.email, nextData);
+      await deleteVaultAction(id, activeUser.id);
+      await loadUserData(activeUser.id);
       showToast('Credencial eliminada');
     } catch (error) {
-      showToast(error?.message || 'Error al eliminar');
+      showToast('Error al eliminar');
     }
   };
 
@@ -840,32 +432,76 @@ export default function HomePage() {
           <div>
             <h1 className="gradient-text">Antigravity Vault</h1>
             <p className="accent-text" style={{ fontSize: '0.8rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-              {activeUser ? activeUser.email : 'SECURE ACCESS'}
+              {activeUser ? `@${activeUser.username}` : 'SECURE ACCESS'}
             </p>
           </div>
         </div>
-        {isLogged && (
-          <button className="ghost" onClick={onLogout}>
-            <LogOut size={18} />
-            Cerrar sesión
-          </button>
-        )}
+        <div className="topbar-status">
+          <span className="status-dot" />
+          <span>{isLogged ? `Sesión activa · ${totalItems} elementos` : 'Acceso protegido'}</span>
+          {isLogged && (
+            <button className="ghost" onClick={onLogout}>
+              <LogOut size={18} />
+              Cerrar sesión
+            </button>
+          )}
+        </div>
       </header>
 
       <main className="shell">
         {/* HERO SECTION */}
         {!isLogged && (
-          <section className="hero">
-            <h1 className="gradient-text">Tus datos, bajo tu control.</h1>
-            <p>Una caja fuerte digital elegante y segura para tus enlaces, contraseñas e imágenes. Todo guardado localmente en tu propia base de datos SQLite.</p>
-            <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
-              <div className="glass-panel" style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                <Zap className="accent-text" />
-                <span style={{ fontWeight: 600 }}>Rápido</span>
+          <section className="hero-enterprise">
+            <div className="hero-container glass-panel">
+              <div className="hero-header">
+                <div className="security-badge">
+                  <ShieldCheck size={24} className="accent-text" />
+                  <span className="badge-text">CERTIFICADO SEGURO</span>
+                </div>
+                <h1 className="gradient-text">Gestión Corporativa de Accesos</h1>
+                <p className="hero-subtitle">Plataforma integral de seguridad para control centralizado de enlaces, credenciales e imágenes con estándares empresariales.</p>
               </div>
-              <div className="glass-panel" style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                <Lock className="accent-text" />
-                <span style={{ fontWeight: 600 }}>Privado</span>
+
+              <div className="hero-row">
+                <div className="hero-value-props">
+                  <div className="value-prop">
+                    <div className="prop-icon">
+                      <Lock size={20} />
+                    </div>
+                    <h3>Encriptación de Datos</h3>
+                    <p>Todos los datos se almacenan con estándares de seguridad empresarial en bases de datos certificadas.</p>
+                  </div>
+                  <div className="value-prop">
+                    <div className="prop-icon">
+                      <Fingerprint size={20} />
+                    </div>
+                    <h3>Verificación Biométrica</h3>
+                    <p>Sesiones privadas con validación de usuario y control de acceso centralizado.</p>
+                  </div>
+                  <div className="value-prop">
+                    <div className="prop-icon">
+                      <BadgeCheck size={20} />
+                    </div>
+                    <h3>Cumplimiento Normativo</h3>
+                    <p>Interface diseñada para auditoría interna y compliance con políticas corporativas.</p>
+                  </div>
+                </div>
+
+                <div className="hero-metrics-panel">
+                  <div className="metrics-title">Protección Activa</div>
+                  <div className="metrics-grid">
+                    {heroMetrics.map((metric) => (
+                      <div className="metric-box" key={metric.label}>
+                        <div className="metric-value">{metric.value}</div>
+                        <div className="metric-label">{metric.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="system-status">
+                    <span className="status-indicator online" />
+                    <span className="status-text">Sistema operativo · Todas las capas activas</span>
+                  </div>
+                </div>
               </div>
             </div>
           </section>
@@ -873,19 +509,20 @@ export default function HomePage() {
 
         {/* AUTH PANEL */}
         {!isLogged && (
-          <div className="glass-panel auth-grid">
-            <div className="card-form">
-              <h2 className="gradient-text">Crear Cuenta</h2>
-              <p style={{ color: 'var(--text-secondary)' }}>Empieza a organizar tu vida digital hoy mismo.</p>
+          <div className="auth-container">
+            <div className="auth-card card-form glass-panel">
+              <div className="panel-kicker"><User size={16} /> NUEVO USUARIO</div>
+              <h2 className="gradient-text">Registrar Cuenta</h2>
+              <p style={{ color: 'var(--text-secondary)' }}>Obtén acceso inmediato a tu panel de control centralizado. Registro rápido y seguro en menos de un minuto.</p>
               <form className="card-form" onSubmit={onRegister}>
                 <div className="input-group">
-                  <label>Correo</label>
+                  <label>Usuario</label>
                   <input
-                    type="email"
-                    placeholder="tu@correo.com"
+                    type="text"
+                    placeholder="Tu nombre de usuario"
                     required
-                    value={registerForm.email}
-                    onChange={(e) => setRegisterForm({ ...registerForm, email: e.target.value })}
+                    value={registerForm.username}
+                    onChange={(e) => setRegisterForm({ ...registerForm, username: e.target.value })}
                   />
                 </div>
                 <div className="input-group">
@@ -905,18 +542,19 @@ export default function HomePage() {
               </form>
             </div>
 
-            <div className="card-form auth-login-sep">
-              <h2 className="gradient-text">Acceder</h2>
-              <p style={{ color: 'var(--text-secondary)' }}>Bienvenido de nuevo. Solo podrás entrar desde este formulario.</p>
+            <div className="auth-card card-form glass-panel auth-login-sep">
+              <div className="panel-kicker"><ShieldCheck size={16} /> ACCESO SEGURO</div>
+              <h2 className="gradient-text">Iniciar Sesión</h2>
+              <p style={{ color: 'var(--text-secondary)' }}>Acceso verificado a tu panel corporativo. Entrada rápida con autenticación segura.</p>
               <form className="card-form" onSubmit={onLogin}>
                 <div className="input-group">
-                  <label>Correo</label>
+                  <label>Usuario</label>
                   <input
-                    type="email"
-                    placeholder="tu@correo.com"
+                    type="text"
+                    placeholder="Tu usuario"
                     required
-                    value={loginForm.email}
-                    onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })}
+                    value={loginForm.username}
+                    onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })}
                   />
                 </div>
                 <div className="input-group">
@@ -934,24 +572,6 @@ export default function HomePage() {
                   Entrar
                 </button>
               </form>
-
-              <div className="glass-panel" style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(255,255,255,0.03)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-                  <Key size={16} className="accent-text" />
-                  <strong>¿Olvidaste tu contraseña?</strong>
-                </div>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '0.85rem' }}>
-                  Te llevamos a una página aparte para pedir el correo de recuperación.
-                </p>
-                <button type="button" className="ghost" onClick={() => router.push('/reset-request')}>
-                  <Key size={16} />
-                  Cambiar contraseña
-                </button>
-              </div>
-
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.75rem' }}>
-                Si todavía no verificaste tu cuenta, revisa el correo que te enviamos al registrarte.
-              </p>
             </div>
           </div>
         )}
@@ -959,15 +579,36 @@ export default function HomePage() {
         {/* APP PANEL */}
         {isLogged && (
           <div className="glass-panel" style={{ padding: '1.5rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
+            <div className="dashboard-hero">
               <div>
+                <div className="panel-kicker"><LayoutGrid size={16} /> Control center</div>
                 <h2 className="gradient-text">Panel de Control</h2>
+                <p className="dashboard-lead">Gestión centralizada de enlaces, vault e imágenes con una lectura más clara de todo lo que tienes guardado.</p>
                 <div className="pill-row">
                   {keywordChips.map(([tag, count]) => (
                     <span className="pill" key={tag}>#{tag} ({count})</span>
                   ))}
                 </div>
               </div>
+              <div className="stats-strip">
+                {dashboardStats.map((stat) => (
+                  <div className="stats-card" key={stat.label}>
+                    <strong>{stat.value}</strong>
+                    <span>{stat.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="dashboard-banner">
+              <div className="banner-icon"><ShieldCheck size={18} /></div>
+              <div>
+                <strong>Sesión privada activa</strong>
+                <p>El acceso sigue centralizado en tu cuenta y el contenido se presenta por paneles separados para no mezclar navegación con datos sensibles.</p>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
               <div className="tabs">
                 <div className={`tab ${activePanel === 'linksPanel' ? 'active' : ''}`} onClick={() => setActivePanel('linksPanel')}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -982,11 +623,6 @@ export default function HomePage() {
                 <div className={`tab ${activePanel === 'imagesPanel' ? 'active' : ''}`} onClick={() => setActivePanel('imagesPanel')}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <ImageIcon size={16} /> Galería
-                  </div>
-                </div>
-                <div className={`tab ${activePanel === 'usersPanel' ? 'active' : ''}`} onClick={() => setActivePanel('usersPanel')}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <User size={16} /> Cuenta
                   </div>
                 </div>
               </div>
@@ -1052,6 +688,9 @@ export default function HomePage() {
                         </div>
                         <div className="card-content">
                           <h3 className="card-title">{link.title || 'Sin título'}</h3>
+                          <a href={link.url} target="_blank" rel="noopener noreferrer" className="card-url">
+                            <ExternalLink size={14} /> {link.url}
+                          </a>
                           {link.notes && <p className="card-notes">{link.notes}</p>}
                           <div className="card-tags">
                             {link.keywords?.split(/\s+/).filter(Boolean).map(tag => (
@@ -1084,7 +723,7 @@ export default function HomePage() {
                       <input type="url" placeholder="https://..." value={vaultForm.siteUrl} onChange={(e) => setVaultForm({...vaultForm, siteUrl: e.target.value})} />
                     </div>
                     <div className="input-group">
-                      <label>Correo electrónico / Login</label>
+                      <label>Usuario / Login</label>
                       <input type="text" placeholder="adrian@email.com" value={vaultForm.loginName} onChange={(e) => setVaultForm({...vaultForm, loginName: e.target.value})} />
                     </div>
                     <div className="input-group">
@@ -1130,7 +769,7 @@ export default function HomePage() {
                           )}
                           <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '12px', marginTop: '0.5rem' }}>
                             <div style={{ marginBottom: '0.5rem' }}>
-                              <label style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.2rem' }}>CORREO ELECTRÓNICO</label>
+                              <label style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.2rem' }}>USUARIO</label>
                               <code style={{ fontSize: '0.9rem', color: '#fff' }}>{entry.loginName || '---'}</code>
                             </div>
                             <div>
@@ -1154,138 +793,33 @@ export default function HomePage() {
             {/* GALLERY TAB */}
             {activePanel === 'imagesPanel' && (
               <div className="animate-in">
-                <div className="glass-panel" style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
-                  <Search size={20} style={{ color: 'var(--accent-secondary)' }} />
-                  <input
-                    type="text"
-                    placeholder="Buscar en la galería..."
-                    value={gallerySearchInput}
-                    onChange={(e) => setGallerySearchInput(e.target.value)}
-                    style={{ background: 'transparent', border: 'none', padding: 0, flex: '1 1 240px' }}
-                  />
-                  <div className="tabs" style={{ marginLeft: 'auto' }}>
-                    <div className={`tab ${galleryFilter === 'all' ? 'active' : ''}`} onClick={() => setGalleryFilter('all')}>
-                      Todos
-                    </div>
-                    <div className={`tab ${galleryFilter === 'withUrl' ? 'active' : ''}`} onClick={() => setGalleryFilter('withUrl')}>
-                      Con URL
-                    </div>
-                    <div className={`tab ${galleryFilter === 'withoutUrl' ? 'active' : ''}`} onClick={() => setGalleryFilter('withoutUrl')}>
-                      Sin URL
-                    </div>
-                  </div>
-                </div>
-
-                <div className="glass-panel" style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
-                  <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>Origen:</span>
-                  <div className="tabs">
-                    <div className={`tab ${gallerySourceFilter === 'links' ? 'active' : ''}`} onClick={() => setGallerySourceFilter('links')}>
-                      Enlaces
-                    </div>
-                    <div className={`tab ${gallerySourceFilter === 'vault' ? 'active' : ''}`} onClick={() => setGallerySourceFilter('vault')}>
-                      Vault
-                    </div>
-                    <div className={`tab ${gallerySourceFilter === 'all' ? 'active' : ''}`} onClick={() => setGallerySourceFilter('all')}>
-                      Todo
-                    </div>
-                  </div>
-                </div>
-
-                {filteredGallery.length === 0 ? (
+                {imageLibrary.length === 0 ? (
                   <div className="glass-panel" style={{ textAlign: 'center', padding: '4rem' }}>
                     <ImageIcon size={48} style={{ opacity: 0.2, marginBottom: '1rem' }} />
-                    <p>No hay elementos en la galería.</p>
+                    <p>No hay imágenes en la galería.</p>
                   </div>
                 ) : (
                   <div className="items-grid">
-                    {filteredGallery.map(item => (
-                      <article className="card" key={`${item.kind}-${item.id}`}>
-                        <div className="card-media" style={{ height: item.kind === 'vault' ? '180px' : '260px' }}>
-                          {item.kind === 'link' ? (
-                            item.url ? (
-                              <a href={item.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', width: '100%', height: '100%' }} title={`Abrir ${item.url}`}>
-                                <img src={item.imageUrl} alt={item.title} />
-                              </a>
-                            ) : (
-                              <img src={item.imageUrl} alt={item.title} />
-                            )
-                          ) : (
-                            <div style={{ opacity: 0.3, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                              <Lock size={48} />
-                              <span style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>VAULT</span>
-                            </div>
-                          )}
+                    {imageLibrary.map(item => (
+                      <article className="card" key={item.id}>
+                        <div className="card-media" style={{ height: '260px' }}>
+                          <img src={item.imageUrl} alt={item.title} />
                         </div>
                         <div className="card-content">
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
-                            <h3 className="card-title">{item.title || 'Sin título'}</h3>
-                            <span className="tag">{item.kind === 'vault' ? 'Vault' : 'Enlace'}</span>
-                          </div>
-                          {item.url && (
-                            <a href={item.url} target="_blank" rel="noopener noreferrer" className="card-url" style={{ marginTop: '0.25rem' }}>
-                              <ExternalLink size={14} /> {item.url}
-                            </a>
-                          )}
-                          {item.kind === 'vault' && item.loginName && (
-                            <p className="card-notes">{item.loginName}</p>
-                          )}
-                          {item.notes && <p className="card-notes">{item.notes}</p>}
-                          {item.kind === 'link' && item.keywords && (
-                            <div className="card-tags">
-                              {item.keywords.split(/\s+/).filter(Boolean).map((tag) => (
-                                <span className="tag" key={tag}>{tag}</span>
-                              ))}
-                            </div>
-                          )}
-                          {item.kind === 'vault' && item.secretValue && (
-                            <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '12px', marginTop: '0.5rem' }}>
-                              <label style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.2rem' }}>CONTRASEÑA</label>
-                              <code style={{ fontSize: '1rem', color: 'var(--accent-secondary)', fontWeight: 700 }}>{item.secretValue}</code>
-                            </div>
-                          )}
+                          <h3 className="card-title">{item.title || 'Sin título'}</h3>
                           <div className="card-footer">
-                            {item.kind === 'vault' ? (
-                              <button className="delete" style={{ padding: '0.5rem' }} onClick={() => onDeleteVault(item.id)}>
-                                <Trash2 size={16} />
-                              </button>
-                            ) : (
-                              <button className="delete" style={{ padding: '0.5rem' }} onClick={() => onRemoveLinkImage(item.id)}>
-                                <Trash2 size={16} />
-                              </button>
-                            )}
+                            <button className="ghost" onClick={() => { onEditLink(item.id); setActivePanel('linksPanel'); }}>
+                              <Search size={16} /> Ver Detalles
+                            </button>
+                            <button className="delete" style={{ padding: '0.5rem' }} onClick={() => onRemoveLinkImage(item.id)}>
+                              <Trash2 size={16} />
+                            </button>
                           </div>
                         </div>
                       </article>
                     ))}
                   </div>
                 )}
-              </div>
-            )}
-
-            {/* USERS TAB */}
-            {activePanel === 'usersPanel' && (
-              <div className="animate-in">
-                <div className="glass-panel" style={{ background: 'rgba(255,255,255,0.02)', marginBottom: '1.5rem' }}>
-                  <h3 className="gradient-text" style={{ marginBottom: '0.5rem' }}>Usuarios registrados</h3>
-                  <p style={{ color: 'var(--text-secondary)' }}>Lista de cuentas guardadas en la tabla User de SQLite.</p>
-                </div>
-
-                <div className="items-grid">
-                  <article className="card" style={{ padding: '1.5rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
-                      <div>
-                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.35rem' }}>Sesión activa</p>
-                        <h3 className="gradient-text">{activeUser?.email || 'Sin sesión'}</h3>
-                        <p style={{ color: activeUser?.emailConfirmedAt ? 'var(--accent-secondary)' : 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '0.35rem' }}>
-                          {activeUser?.emailConfirmedAt ? 'Correo verificado' : 'Verificación pendiente'}
-                        </p>
-                      </div>
-                      <div className="glass-panel" style={{ padding: '0.75rem 1rem', borderRadius: '14px', background: 'rgba(255,255,255,0.04)' }}>
-                        <ShieldCheck size={18} className="accent-text" />
-                      </div>
-                    </div>
-                  </article>
-                </div>
               </div>
             )}
           </div>
